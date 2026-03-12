@@ -17,6 +17,7 @@
 import { base58Decode } from '../utils/base58.js';
 import { base64urlEncodeFromBytes } from '../utils/base64.js';
 import type { DIDResolver, DIDDocument, VerificationMethod } from './vc-verifier.js';
+import { logger } from '../logging/index.js';
 
 /** Ed25519 multicodec prefix (0xed 0x01) */
 const ED25519_MULTICODEC_PREFIX = new Uint8Array([0xed, 0x01]);
@@ -70,7 +71,8 @@ export function extractPublicKeyFromDidKey(did: string): Uint8Array | null {
 
     // Extract the public key (bytes after the prefix)
     return multicodecBytes.slice(ED25519_MULTICODEC_PREFIX.length);
-  } catch {
+  } catch (error) {
+    logger.debug('Failed to extract public key from did:key', error);
     return null;
   }
 }

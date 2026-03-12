@@ -120,7 +120,7 @@ async function main() {
   const keyPair = await crypto.generateKeyPair();
 
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#key-1`;
+  const kid = `${did}#keys-1`;
 
   console.error(`[mcpi] Agent DID: ${did}`);
 

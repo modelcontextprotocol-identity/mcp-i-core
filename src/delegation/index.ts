@@ -13,6 +13,7 @@ export * from './delegation-graph.js';
 export * from './cascading-revocation.js';
 export * from './utils.js';
 export * from './outbound-proof.js';
+export * from './outbound-headers.js';
 export * from './audience-validator.js';
 export {
   createDidKeyResolver,

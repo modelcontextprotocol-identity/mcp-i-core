@@ -10,7 +10,7 @@ async function createTestMiddleware(options?: { autoSession?: boolean }) {
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#key-1`;
+  const kid = `${did}#keys-1`;
 
   return createMCPIMiddleware(
     {
@@ -240,7 +240,8 @@ describe('createMCPIMiddleware', () => {
       expect(proof.jws).toBeDefined();
       expect(proof.meta.did).toMatch(/^did:key:/);
       expect(proof.meta.sessionId).toMatch(/^mcpi_/);
-      expect(proof.meta.nonce).toMatch(/^auto-/);
+      // Nonce is now a base64url-encoded 16-byte random value
+      expect(proof.meta.nonce).toMatch(/^[A-Za-z0-9_-]+$/);
     });
 
     it('should reuse auto-created session across multiple calls', async () => {

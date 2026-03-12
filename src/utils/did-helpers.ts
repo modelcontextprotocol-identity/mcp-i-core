@@ -43,7 +43,7 @@ export function getDidMethod(did: string): string | null {
     return null;
   }
   const match = did.match(/^did:([^:]+):/);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 /**
@@ -127,7 +127,8 @@ export function getServerDid(config: {
  */
 export function extractAgentId(did: string): string {
   const parts = did.split(':');
-  return parts[parts.length - 1];
+  // split() always returns at least one element
+  return parts[parts.length - 1] ?? did;
 }
 
 /**

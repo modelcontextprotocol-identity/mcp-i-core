@@ -222,7 +222,7 @@ describe('MemoryIdentityProvider', () => {
 
       expect(identity).toBeDefined();
       expect(identity.did).toMatch(/^did:key:z/);
-      expect(identity.kid).toBe(`${identity.did}#key-1`);
+      expect(identity.kid).toBe(`${identity.did}#keys-1`);
       expect(identity.privateKey).toMatch(/^[A-Za-z0-9+/=]+$/); // Valid base64 string
       expect(identity.publicKey).toMatch(/^[A-Za-z0-9+/=]+$/); // Valid base64 string
       expect(identity.type).toBe('development');
@@ -246,7 +246,7 @@ describe('MemoryIdentityProvider', () => {
     it('should save and return the saved identity', async () => {
       const customIdentity = {
         did: 'did:key:zcustom',
-        kid: 'did:key:zcustom#key-1',
+        kid: 'did:key:zcustom#keys-1',
         privateKey: 'custom-private',
         publicKey: 'custom-public',
         createdAt: new Date().toISOString(),
