@@ -21,5 +21,12 @@ export {
   extractPublicKeyFromDidKey,
   publicKeyToJwk,
 } from './did-key-resolver.js';
+export {
+  DidWebResolver,
+  createDidWebResolver,
+  isDidWeb,
+  parseDidWeb,
+  didWebToUrl,
+} from './did-web-resolver.js';
 export { MemoryStatusListStorage } from './storage/memory-statuslist-storage.js';
 export { MemoryDelegationGraphStorage } from './storage/memory-graph-storage.js';
