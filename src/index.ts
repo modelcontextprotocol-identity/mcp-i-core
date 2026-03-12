@@ -5,6 +5,14 @@
  * This package is a DIF TAAWG protocol reference implementation.
  *
  * Related Spec: https://modelcontextprotocol-identity.io
+ *
+ * ## Error handling strategy
+ *
+ * - **Validation functions** (`verify*`, `validate*`) return result objects `{ valid, reason }` — never throw
+ * - **Construction/setup functions** throw `Error` on invalid configuration
+ * - **Resolution functions** (`resolve*`, `fetch*`) return `null` on failure — never throw
+ *
+ * This ensures callers can always handle failures without try/catch on validation paths.
  */
 
 // Protocol types
@@ -246,3 +254,10 @@ export {
   type Logger,
   type Level,
 } from './logging/index.js';
+
+// Ed25519 Constants
+export {
+  ED25519_PKCS8_DER_HEADER,
+  ED25519_SPKI_DER_HEADER_LENGTH,
+  ED25519_KEY_SIZE,
+} from './utils/index.js';

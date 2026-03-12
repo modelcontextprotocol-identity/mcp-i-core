@@ -20,6 +20,7 @@ import {
   PROOF_VERIFICATION_ERROR_CODES,
   type ProofVerificationErrorCode,
 } from "./errors.js";
+import { logger } from "../logging/index.js";
 
 export interface ProofVerificationResult {
   valid: boolean;
@@ -67,69 +68,15 @@ export class ProofVerifier {
     publicKeyJwk: Ed25519JWK
   ): Promise<ProofVerificationResult> {
     try {
-      // 1. Validate proof structure
-      const structureValidation = await this.validateProofStructure(proof);
-      if (!structureValidation.valid) {
-        return structureValidation;
-      }
-      const validatedProof = structureValidation.proof!;
-
-      // 2. Check nonce replay protection (scoped to agent DID to prevent cross-agent replay attacks)
-      const nonceValidation = await this.validateNonce(
-        validatedProof.meta.nonce,
-        validatedProof.meta.did
-      );
-      if (!nonceValidation.valid) {
-        return nonceValidation;
-      }
-
-      // 3. Check timestamp skew
-      const timestampValidation = await this.validateTimestamp(
-        validatedProof.meta.ts
-      );
-      if (!timestampValidation.valid) {
-        return timestampValidation;
-      }
-
-      // 4. Reconstruct canonical payload from proof meta
-      const canonicalPayloadString = this.buildCanonicalPayload(
-        validatedProof.meta
-      );
+      // Reconstruct canonical payload from proof meta
+      const canonicalPayloadString = this.buildCanonicalPayload(proof.meta);
       const canonicalPayloadBytes = new TextEncoder().encode(
         canonicalPayloadString
       );
 
-      // 5. Verify JWS signature with detached canonical payload
-      const signatureValidation = await this.verifySignature(
-        validatedProof.jws,
-        publicKeyJwk,
-        canonicalPayloadBytes,
-        validatedProof.meta.kid
-      );
-      if (!signatureValidation.valid) {
-        return signatureValidation;
-      }
-
-      // 6. Add nonce to cache to prevent replay (scoped to agent DID)
-      await this.addNonceToCache(
-        validatedProof.meta.nonce,
-        validatedProof.meta.did
-      );
-
-      return {
-        valid: true,
-      };
+      return await this.runVerificationPipeline(proof, publicKeyJwk, canonicalPayloadBytes);
     } catch (error) {
-      // Security-safe failure: never throw, always return error result
-      return {
-        valid: false,
-        reason: "Proof verification error",
-        errorCode: PROOF_VERIFICATION_ERROR_CODES.VERIFICATION_ERROR,
-        error: error instanceof Error ? error : new Error(String(error)),
-        details: {
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
-      };
+      return this.handleVerificationError(error);
     }
   }
 
@@ -146,68 +93,85 @@ export class ProofVerifier {
     publicKeyJwk: Ed25519JWK
   ): Promise<ProofVerificationResult> {
     try {
-      // 1. Validate proof structure
-      const structureValidation = await this.validateProofStructure(proof);
-      if (!structureValidation.valid) {
-        return structureValidation;
-      }
-      const validatedProof = structureValidation.proof!;
-
-      // 2. Check nonce replay protection (scoped to agent DID to prevent cross-agent replay attacks)
-      const nonceValidation = await this.validateNonce(
-        validatedProof.meta.nonce,
-        validatedProof.meta.did
-      );
-      if (!nonceValidation.valid) {
-        return nonceValidation;
-      }
-
-      // 3. Check timestamp skew
-      const timestampValidation = await this.validateTimestamp(
-        validatedProof.meta.ts
-      );
-      if (!timestampValidation.valid) {
-        return timestampValidation;
-      }
-
-      // 4. Convert canonical payload to Uint8Array if needed
+      // Convert canonical payload to Uint8Array if needed
       const canonicalPayloadBytes =
         canonicalPayload instanceof Uint8Array
           ? canonicalPayload
           : new TextEncoder().encode(canonicalPayload);
 
-      // 5. Verify JWS signature with detached payload
-      const signatureValidation = await this.verifySignature(
-        validatedProof.jws,
-        publicKeyJwk,
-        canonicalPayloadBytes,
-        validatedProof.meta.kid
-      );
-      if (!signatureValidation.valid) {
-        return signatureValidation;
-      }
-
-      // 6. Add nonce to cache (scoped to agent DID)
-      await this.addNonceToCache(
-        validatedProof.meta.nonce,
-        validatedProof.meta.did
-      );
-
-      return {
-        valid: true,
-      };
+      return await this.runVerificationPipeline(proof, publicKeyJwk, canonicalPayloadBytes);
     } catch (error) {
-      // Security-safe failure: never throw, always return error result
-      return {
-        valid: false,
-        reason: "Proof verification error",
-        errorCode: PROOF_VERIFICATION_ERROR_CODES.VERIFICATION_ERROR,
-        error: error instanceof Error ? error : new Error(String(error)),
-        details: {
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
-      };
+      return this.handleVerificationError(error);
     }
+  }
+
+  /**
+   * Shared verification pipeline for proof verification
+   * @private
+   */
+  private async runVerificationPipeline(
+    proof: DetachedProof,
+    publicKeyJwk: Ed25519JWK,
+    canonicalPayloadBytes: Uint8Array
+  ): Promise<ProofVerificationResult> {
+    // 1. Validate proof structure
+    const structureValidation = await this.validateProofStructure(proof);
+    if (!structureValidation.valid) {
+      return structureValidation;
+    }
+    const validatedProof = structureValidation.proof!;
+
+    // 2. Check nonce replay protection (scoped to agent DID to prevent cross-agent replay attacks)
+    const nonceValidation = await this.validateNonce(
+      validatedProof.meta.nonce,
+      validatedProof.meta.did
+    );
+    if (!nonceValidation.valid) {
+      return nonceValidation;
+    }
+
+    // 3. Check timestamp skew
+    const timestampValidation = await this.validateTimestamp(
+      validatedProof.meta.ts
+    );
+    if (!timestampValidation.valid) {
+      return timestampValidation;
+    }
+
+    // 4. Verify JWS signature with canonical payload
+    const signatureValidation = await this.verifySignature(
+      validatedProof.jws,
+      publicKeyJwk,
+      canonicalPayloadBytes,
+      validatedProof.meta.kid
+    );
+    if (!signatureValidation.valid) {
+      return signatureValidation;
+    }
+
+    // 5. Add nonce to cache to prevent replay (scoped to agent DID)
+    await this.addNonceToCache(
+      validatedProof.meta.nonce,
+      validatedProof.meta.did
+    );
+
+    return { valid: true };
+  }
+
+  /**
+   * Handle verification errors consistently
+   * @private
+   */
+  private handleVerificationError(error: unknown): ProofVerificationResult {
+    return {
+      valid: false,
+      reason: "Proof verification error",
+      errorCode: PROOF_VERIFICATION_ERROR_CODES.VERIFICATION_ERROR,
+      error: error instanceof Error ? error : new Error(String(error)),
+      details: {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+    };
   }
 
   /**
@@ -433,10 +397,7 @@ export class ProofVerifier {
       if (error instanceof ProofVerificationError) {
         throw error;
       }
-      console.error(
-        "[ProofVerifier] Failed to fetch public key from DID:",
-        error
-      );
+      logger.error("[ProofVerifier] Failed to fetch public key from DID", { error });
       throw new ProofVerificationError(
         PROOF_VERIFICATION_ERROR_CODES.DID_RESOLUTION_FAILED,
         `DID resolution failed: ${error instanceof Error ? error.message : String(error)}`,
