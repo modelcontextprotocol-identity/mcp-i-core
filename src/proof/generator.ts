@@ -18,6 +18,8 @@ import type {
 } from '../types/protocol.js';
 import type { CryptoProvider } from '../providers/base.js';
 import { CryptoService, type Ed25519JWK } from '../utils/crypto-service.js';
+import { base64ToBytes, base64urlEncodeFromBytes, bytesToBase64 } from '../utils/base64.js';
+import { ED25519_PKCS8_DER_HEADER, ED25519_KEY_SIZE } from '../utils/ed25519-constants.js';
 
 export interface ProofAgentIdentity {
   did: string;
@@ -54,6 +56,19 @@ export class ProofGenerator {
     this.cryptoProvider = cryptoProvider;
   }
 
+  /**
+   * Generate a detached proof for an MCP tool call.
+   *
+   * Creates a JWS (JSON Web Signature) that binds the tool request and response
+   * to the agent's identity and current session context.
+   *
+   * @param request - The MCP tool request (method + params)
+   * @param response - The tool response data
+   * @param session - The current session context from handshake
+   * @param options - Optional proof metadata (scopeId, delegationRef, clientDid)
+   * @returns Detached proof containing JWS and proof metadata
+   * @throws {Error} If JWS generation fails (invalid key, crypto error)
+   */
   async generateProof(
     request: ToolRequest,
     response: ToolResponse,
@@ -145,32 +160,17 @@ export class ProofGenerator {
   }
 
   private formatPrivateKeyAsPEM(base64PrivateKey: string): string {
-    const binaryStr = atob(base64PrivateKey);
-    const keyData = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      keyData[i] = binaryStr.charCodeAt(i);
-    }
+    const keyData = base64ToBytes(base64PrivateKey);
 
-    const pkcs8Header = new Uint8Array([
-      0x30, 0x2e,
-      0x02, 0x01, 0x00,
-      0x30, 0x05,
-      0x06, 0x03, 0x2b, 0x65, 0x70,
-      0x04, 0x22,
-      0x04, 0x20,
-    ]);
+    // Extract raw 32-byte seed
+    const rawKey = keyData.subarray(0, ED25519_KEY_SIZE);
 
-    const rawKey = keyData.subarray(0, 32);
-    const fullKey = new Uint8Array(pkcs8Header.length + rawKey.length);
-    fullKey.set(pkcs8Header);
-    fullKey.set(rawKey, pkcs8Header.length);
+    // Build full PKCS#8 key: header + raw key
+    const fullKey = new Uint8Array(ED25519_PKCS8_DER_HEADER.length + rawKey.length);
+    fullKey.set(ED25519_PKCS8_DER_HEADER);
+    fullKey.set(rawKey, ED25519_PKCS8_DER_HEADER.length);
 
-    let binaryStrOut = '';
-    for (let i = 0; i < fullKey.length; i++) {
-      binaryStrOut += String.fromCharCode(fullKey[i]!);
-    }
-    const base64Key = btoa(binaryStrOut);
-
+    const base64Key = bytesToBase64(fullKey);
     const formattedKey = base64Key.match(/.{1,64}/g)?.join('\n') ?? base64Key;
 
     return (
@@ -208,29 +208,16 @@ export class ProofGenerator {
   }
 
   private base64PublicKeyToJWK(publicKeyBase64: string): Ed25519JWK {
-    const binaryStr = atob(publicKeyBase64);
-    const publicKeyBytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      publicKeyBytes[i] = binaryStr.charCodeAt(i);
-    }
+    const publicKeyBytes = base64ToBytes(publicKeyBase64);
 
-    if (publicKeyBytes.length !== 32) {
+    if (publicKeyBytes.length !== ED25519_KEY_SIZE) {
       throw new Error(`Invalid Ed25519 public key length: ${publicKeyBytes.length}`);
     }
-
-    let binaryStrOut = '';
-    for (let i = 0; i < publicKeyBytes.length; i++) {
-      binaryStrOut += String.fromCharCode(publicKeyBytes[i]!);
-    }
-    const base64url = btoa(binaryStrOut)
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
 
     return {
       kty: 'OKP',
       crv: 'Ed25519',
-      x: base64url,
+      x: base64urlEncodeFromBytes(publicKeyBytes),
       kid: this.identity.kid,
     };
   }

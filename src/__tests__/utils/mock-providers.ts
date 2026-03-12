@@ -14,6 +14,8 @@ import {
   IdentityProvider,
   type AgentIdentity,
 } from '../../providers/base.js';
+import type { DIDDocument } from '../../delegation/vc-verifier.js';
+import type { StatusList2021Credential, DelegationRecord } from '../../types/protocol.js';
 
 /**
  * Mock Crypto Provider
@@ -92,9 +94,9 @@ export class MockClockProvider extends ClockProvider {
  * Mock Fetch Provider
  */
 export class MockFetchProvider extends FetchProvider {
-  private didDocuments = new Map<string, unknown>();
-  private statusLists = new Map<string, unknown>();
-  private delegationChains = new Map<string, unknown[]>();
+  private didDocuments = new Map<string, DIDDocument>();
+  private statusLists = new Map<string, StatusList2021Credential>();
+  private delegationChains = new Map<string, DelegationRecord[]>();
   public fetch: (url: string, options?: unknown) => Promise<Response>;
 
   constructor() {
@@ -109,40 +111,28 @@ export class MockFetchProvider extends FetchProvider {
     ) as (url: string, options?: unknown) => Promise<Response>;
   }
 
-  setDIDDocument(did: string, doc: unknown): void {
+  setDIDDocument(did: string, doc: DIDDocument): void {
     this.didDocuments.set(did, doc);
   }
 
-  setStatusList(url: string, list: unknown): void {
+  setStatusList(url: string, list: StatusList2021Credential): void {
     this.statusLists.set(url, list);
   }
 
-  setDelegationChain(id: string, chain: unknown[]): void {
+  setDelegationChain(id: string, chain: DelegationRecord[]): void {
     this.delegationChains.set(id, chain);
   }
 
-  async resolveDID(did: string): Promise<unknown> {
-    const doc = this.didDocuments.get(did);
-    if (!doc) {
-      throw new Error(`DID ${did} not found`);
-    }
-    return doc;
+  async resolveDID(did: string): Promise<DIDDocument | null> {
+    return this.didDocuments.get(did) ?? null;
   }
 
-  async fetchStatusList(url: string): Promise<unknown> {
-    const list = this.statusLists.get(url);
-    if (!list) {
-      throw new Error(`Status list ${url} not found`);
-    }
-    return list;
+  async fetchStatusList(url: string): Promise<StatusList2021Credential | null> {
+    return this.statusLists.get(url) ?? null;
   }
 
-  async fetchDelegationChain(id: string): Promise<unknown[]> {
-    const chain = this.delegationChains.get(id);
-    if (!chain) {
-      throw new Error(`Delegation chain ${id} not found`);
-    }
-    return chain;
+  async fetchDelegationChain(id: string): Promise<DelegationRecord[]> {
+    return this.delegationChains.get(id) ?? [];
   }
 }
 

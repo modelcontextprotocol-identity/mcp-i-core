@@ -33,6 +33,16 @@ export interface DelegationProofOptions {
   targetHostname: string;
 }
 
+/**
+ * Build a signed delegation proof JWT for outbound HTTP requests.
+ *
+ * Creates a short-lived (60s) EdDSA-signed JWT containing delegation context
+ * that can be verified by downstream services without access to the MCP server.
+ *
+ * @param options - Proof options including DIDs, delegation info, scopes, and signing key
+ * @returns Compact JWS string (header.payload.signature)
+ * @throws {Error} If key import or signing fails
+ */
 export async function buildDelegationProofJWT(
   options: DelegationProofOptions
 ): Promise<string> {

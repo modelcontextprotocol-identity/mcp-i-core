@@ -115,6 +115,10 @@ function buildPrivateKeyJwk(
  * @param _cryptoProvider - CryptoProvider (reserved for future use)
  * @returns Headers object to attach to the outbound request
  *
+ * @throws {Error} If session is missing agentDid or sessionId
+ * @throws {Error} If delegation is missing vcId
+ * @throws {Error} If serverIdentity.did is not a valid Ed25519 did:key
+ *
  * @example
  * ```typescript
  * const headers = await buildOutboundDelegationHeaders({
