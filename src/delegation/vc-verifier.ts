@@ -89,20 +89,41 @@ export class DelegationCredentialVerifier {
     string,
     { result: DelegationVCVerificationResult; expiresAt: number }
   >();
+  private cacheInsertionOrder: string[] = [];
   private cacheTtl: number;
+  /**
+   * Maximum number of entries in the verification cache.
+   * In production deployments, configure maxCacheSize based on expected concurrent delegations.
+   * Default of 1000 is suitable for most use cases.
+   */
+  private maxCacheSize: number;
 
   constructor(options?: {
     didResolver?: DIDResolver;
     statusListResolver?: StatusListResolver;
     signatureVerifier?: SignatureVerificationFunction;
     cacheTtl?: number;
+    /** Maximum cache entries. Default: 1000 */
+    maxCacheSize?: number;
   }) {
     this.didResolver = options?.didResolver;
     this.statusListResolver = options?.statusListResolver;
     this.signatureVerifier = options?.signatureVerifier;
     this.cacheTtl = options?.cacheTtl || 60_000;
+    this.maxCacheSize = options?.maxCacheSize ?? 1000;
   }
 
+  /**
+   * Verify a delegation credential through progressive enhancement.
+   *
+   * Stage 1: Fast basic checks (schema, expiry, status field)
+   * Stage 2: Parallel signature and status list checks (if resolvers configured)
+   * Stage 3: Combined result with timing metrics
+   *
+   * @param vc - The W3C Delegation Credential to verify
+   * @param options - Verification options (skip cache/signature/status, custom resolvers)
+   * @returns Verification result with validity, reason, stage reached, and metrics
+   */
   async verifyDelegationCredential(
     vc: DelegationCredential,
     options: VerifyDelegationVCOptions = {},
@@ -250,9 +271,9 @@ export class DelegationCredentialVerifier {
 
       if (!didResolver || !this.signatureVerifier) {
         return {
-          valid: true,
+          valid: false,
           reason:
-            "No DID resolver or signature verifier available, skipping signature verification",
+            "No DID resolver or signature verifier configured — signature cannot be verified",
           durationMs: Date.now() - startTime,
         };
       }
@@ -380,18 +401,32 @@ export class DelegationCredentialVerifier {
   }
 
   private setInCache(id: string, result: DelegationVCVerificationResult): void {
+    // Evict oldest entry if cache exceeds maxCacheSize (simple FIFO)
+    while (this.cache.size >= this.maxCacheSize && this.cacheInsertionOrder.length > 0) {
+      const oldestId = this.cacheInsertionOrder.shift();
+      if (oldestId) {
+        this.cache.delete(oldestId);
+      }
+    }
+
     this.cache.set(id, {
       result,
       expiresAt: Date.now() + this.cacheTtl,
     });
+    this.cacheInsertionOrder.push(id);
   }
 
   clearCache(): void {
     this.cache.clear();
+    this.cacheInsertionOrder = [];
   }
 
   clearCacheEntry(id: string): void {
     this.cache.delete(id);
+    const idx = this.cacheInsertionOrder.indexOf(id);
+    if (idx !== -1) {
+      this.cacheInsertionOrder.splice(idx, 1);
+    }
   }
 }
 
