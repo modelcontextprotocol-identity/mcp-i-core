@@ -292,7 +292,7 @@ describe("DelegationCredentialVerifier", () => {
       expect(mockSignatureVerifier).not.toHaveBeenCalled();
     });
 
-    it("should skip signature verification when no resolver available", async () => {
+    it("should fail signature verification when no resolver available", async () => {
       await setupDefaultContractsMocks();
       const verifierWithoutResolver = new DelegationCredentialVerifier({
         statusListResolver: mockStatusListResolver,
@@ -304,8 +304,9 @@ describe("DelegationCredentialVerifier", () => {
       const result =
         await verifierWithoutResolver.verifyDelegationCredential(mockValidVC);
 
-      expect(result.valid).toBe(true);
-      expect(result.checks?.signatureValid).toBe(true); // Trust but don't verify
+      expect(result.valid).toBe(false);
+      expect(result.checks?.signatureValid).toBe(false);
+      expect(result.reason).toContain("No DID resolver or signature verifier configured");
     });
 
     it("should fail when DID resolution fails", async () => {

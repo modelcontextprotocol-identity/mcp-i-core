@@ -69,6 +69,17 @@ export class SessionManager {
     this.config.serverDid = serverDid;
   }
 
+  /**
+   * Validate an MCP-I handshake request and create a session.
+   *
+   * Performs the following checks:
+   * - Timestamp within acceptable skew window
+   * - Audience matches server DID (if configured)
+   * - Nonce not previously used (replay protection)
+   *
+   * @param request - The handshake request containing nonce, audience, timestamp, and optional agentDid
+   * @returns Result object with success flag, session on success, or error details on failure
+   */
   async validateHandshake(request: HandshakeRequest): Promise<HandshakeResult> {
     try {
       const now = Math.floor(Date.now() / 1000);
@@ -81,6 +92,17 @@ export class SessionManager {
             code: 'XMCP_I_EHANDSHAKE',
             message: `Timestamp outside acceptable range (±${this.config.timestampSkewSeconds}s)`,
             remediation: `Check NTP sync on client and server. Current server time: ${now}, received: ${request.timestamp}, diff: ${timeDiff}s. Adjust timestampSkewSeconds if needed.`,
+          },
+        };
+      }
+
+      // Validate audience matches this server's DID (SPEC.md §4 MUST)
+      if (this.config.serverDid && request.audience !== this.config.serverDid) {
+        return {
+          success: false,
+          error: {
+            code: 'MCPI_AUDIENCE_MISMATCH',
+            message: `Audience mismatch: expected ${this.config.serverDid}, got ${request.audience}`,
           },
         };
       }
@@ -138,6 +160,16 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Retrieve a session by ID, checking for expiration.
+   *
+   * Updates lastActivity timestamp on successful retrieval (sliding window expiry).
+   * Returns null if session doesn't exist, has exceeded idle TTL, or has exceeded
+   * absolute lifetime (if configured).
+   *
+   * @param sessionId - The session ID (e.g., "mcpi_...")
+   * @returns Session context if valid, null if expired or not found
+   */
   async getSession(sessionId: string): Promise<SessionContext | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;

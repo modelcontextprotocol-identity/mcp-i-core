@@ -74,6 +74,16 @@ export class DelegationCredentialIssuer {
     } as DelegationCredential;
   }
 
+  /**
+   * Create and issue a delegation credential in one step.
+   *
+   * Constructs a DelegationRecord from the provided parameters and wraps it
+   * in a signed W3C Verifiable Credential.
+   *
+   * @param params - Delegation parameters including issuer/subject DIDs, constraints, etc.
+   * @param options - Optional VC issuance options (id, dates, status, contexts)
+   * @returns Signed W3C Delegation Credential
+   */
   async createAndIssueDelegation(
     params: {
       id: string;

@@ -5,6 +5,9 @@
  * platform-specific implementations.
  */
 
+import type { DIDDocument } from '../delegation/vc-verifier.js';
+import type { StatusList2021Credential, DelegationRecord } from '../types/protocol.js';
+
 export abstract class CryptoProvider {
   abstract sign(data: Uint8Array, privateKey: string): Promise<Uint8Array>;
   abstract verify(data: Uint8Array, signature: Uint8Array, publicKey: string): Promise<boolean>;
@@ -26,9 +29,9 @@ export abstract class ClockProvider {
 }
 
 export abstract class FetchProvider {
-  abstract resolveDID(did: string): Promise<unknown>;
-  abstract fetchStatusList(url: string): Promise<unknown>;
-  abstract fetchDelegationChain(id: string): Promise<unknown[]>;
+  abstract resolveDID(did: string): Promise<DIDDocument | null>;
+  abstract fetchStatusList(url: string): Promise<StatusList2021Credential | null>;
+  abstract fetchDelegationChain(id: string): Promise<DelegationRecord[]>;
   abstract fetch(url: string, options?: unknown): Promise<Response>;
 }
 

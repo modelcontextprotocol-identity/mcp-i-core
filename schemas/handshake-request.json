@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.modelcontextprotocol-identity.io/mcpi/handshake-request.json",
+  "title": "MCP-I Handshake Request",
+  "description": "Client-initiated handshake request to establish an MCP-I session with nonce-based replay protection.",
+  "type": "object",
+  "required": ["nonce", "audience", "timestamp"],
+  "properties": {
+    "nonce": {
+      "type": "string",
+      "minLength": 22,
+      "description": "Base64url-encoded random value (minimum 16 bytes) for replay prevention. Each nonce MUST be unique per session."
+    },
+    "audience": {
+      "type": "string",
+      "description": "The intended recipient's DID (did:key or did:web). MUST match the server's DID for the request to be accepted."
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp in seconds. Server MAY reject requests with timestamps outside acceptable skew window (default: 120 seconds)."
+    },
+    "agentDid": {
+      "type": "string",
+      "pattern": "^did:(key|web):.+$",
+      "description": "The agent's DID if authenticated. Required for authenticated sessions."
+    },
+    "clientInfo": {
+      "type": "object",
+      "description": "Optional client metadata for session context.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Client application name."
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable client title."
+        },
+        "version": {
+          "type": "string",
+          "description": "Client version string."
+        },
+        "platform": {
+          "type": "string",
+          "description": "Operating system or platform identifier."
+        },
+        "vendor": {
+          "type": "string",
+          "description": "Client vendor or organization."
+        },
+        "persistentId": {
+          "type": "string",
+          "description": "Persistent client identifier across sessions."
+        },
+        "clientId": {
+          "type": "string",
+          "description": "Unique client instance identifier."
+        }
+      },
+      "required": ["name"]
+    },
+    "clientProtocolVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Client's supported MCP-I protocol version (e.g., '1.0')."
+    },
+    "clientCapabilities": {
+      "type": "object",
+      "description": "Client capability flags for feature negotiation.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "nonce": "k7Hy9mNpQrStUvWxYz01Aa",
+      "audience": "did:web:example.com",
+      "timestamp": 1710268800,
+      "agentDid": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+      "clientProtocolVersion": "1.0"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ async function createTestMiddleware(options?: { autoSession?: boolean }) {
   const did = generateDidKeyFromBase64(keyPair.publicKey);
   const kid = `${did}#keys-1`;
 
-  return createMCPIMiddleware(
+  const middleware = createMCPIMiddleware(
     {
       identity: { did, kid, privateKey: keyPair.privateKey, publicKey: keyPair.publicKey },
       session: { sessionTtlMinutes: 60 },
@@ -20,15 +20,17 @@ async function createTestMiddleware(options?: { autoSession?: boolean }) {
     },
     crypto,
   );
+
+  return { middleware, did };
 }
 
 describe('createMCPIMiddleware', () => {
   describe('handleHandshake', () => {
     it('should establish a session with valid handshake', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi, did } = await createTestMiddleware();
       const result = await mcpi.handleHandshake({
         nonce: 'test-nonce',
-        audience: 'did:web:example.com',
+        audience: did,
         timestamp: Math.floor(Date.now() / 1000),
       });
 
@@ -40,7 +42,7 @@ describe('createMCPIMiddleware', () => {
     });
 
     it('should reject invalid handshake', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi } = await createTestMiddleware();
       const result = await mcpi.handleHandshake({ nonce: 'test' });
 
       expect(result.isError).toBe(true);
@@ -52,12 +54,12 @@ describe('createMCPIMiddleware', () => {
 
   describe('wrapWithProof', () => {
     it('should attach proof in _meta after handshake', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi, did } = await createTestMiddleware();
 
       // Handshake first
       const hs = await mcpi.handleHandshake({
         nonce: 'test-nonce',
-        audience: 'did:web:example.com',
+        audience: did,
         timestamp: Math.floor(Date.now() / 1000),
       });
       const sessionId = JSON.parse(hs.content[0].text).sessionId;
@@ -85,11 +87,11 @@ describe('createMCPIMiddleware', () => {
     });
 
     it('should not attach proof when result is an error', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi, did } = await createTestMiddleware();
 
       const hs = await mcpi.handleHandshake({
         nonce: 'test-nonce',
-        audience: 'did:web:example.com',
+        audience: did,
         timestamp: Math.floor(Date.now() / 1000),
       });
       const sessionId = JSON.parse(hs.content[0].text).sessionId;
@@ -105,7 +107,7 @@ describe('createMCPIMiddleware', () => {
     });
 
     it('should return result without proof when no session exists and autoSession is off', async () => {
-      const mcpi = await createTestMiddleware({ autoSession: false });
+      const { middleware: mcpi } = await createTestMiddleware({ autoSession: false });
 
       const handler = mcpi.wrapWithProof('greet', async () => ({
         content: [{ type: 'text', text: 'Hello!' }],
@@ -162,7 +164,7 @@ describe('createMCPIMiddleware', () => {
     }
 
     it('should return needs_authorization when no _mcpi_delegation arg is provided', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi } = await createTestMiddleware();
 
       const handler = mcpi.wrapWithDelegation(
         'my-tool',
@@ -182,7 +184,7 @@ describe('createMCPIMiddleware', () => {
     });
 
     it('should reject when VC has wrong scope', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi } = await createTestMiddleware();
       const vc = await issueDelegationVC(['wrong:scope']);
 
       const handler = mcpi.wrapWithDelegation(
@@ -199,7 +201,7 @@ describe('createMCPIMiddleware', () => {
     });
 
     it('should accept and call handler when VC has correct scope and valid signature', async () => {
-      const mcpi = await createTestMiddleware();
+      const { middleware: mcpi } = await createTestMiddleware();
       const vc = await issueDelegationVC(['test:scope', 'other:scope']);
 
       const handler = mcpi.wrapWithDelegation(
@@ -222,7 +224,7 @@ describe('createMCPIMiddleware', () => {
 
   describe('autoSession', () => {
     it('should auto-create session and attach proof without handshake', async () => {
-      const mcpi = await createTestMiddleware({ autoSession: true });
+      const { middleware: mcpi } = await createTestMiddleware({ autoSession: true });
 
       const handler = mcpi.wrapWithProof('greet', async (args) => ({
         content: [{ type: 'text', text: `Hello, ${args['name']}!` }],
@@ -245,7 +247,7 @@ describe('createMCPIMiddleware', () => {
     });
 
     it('should reuse auto-created session across multiple calls', async () => {
-      const mcpi = await createTestMiddleware({ autoSession: true });
+      const { middleware: mcpi } = await createTestMiddleware({ autoSession: true });
 
       const handler = mcpi.wrapWithProof('greet', async () => ({
         content: [{ type: 'text', text: 'Hello!' }],

@@ -247,10 +247,39 @@ describe("SessionManager", () => {
   describe("setServerDid", () => {
     it("should include serverDid in session when set", async () => {
       manager.setServerDid("did:web:example.com:server");
-      const request = makeRequest();
+      const request = makeRequest({ audience: "did:web:example.com:server" });
       const { session } = await manager.validateHandshake(request);
 
       expect(session?.serverDid).toBe("did:web:example.com:server");
+    });
+  });
+
+  describe("Audience validation", () => {
+    it("should reject handshake when audience doesn't match serverDid", async () => {
+      const sm = makeSessionManager({ serverDid: "did:web:example.com:server" });
+      const request = makeRequest({ audience: "did:web:other.com:server" });
+      const result = await sm.validateHandshake(request);
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe("MCPI_AUDIENCE_MISMATCH");
+      expect(result.error?.message).toContain("Audience mismatch");
+    });
+
+    it("should accept handshake when audience matches serverDid", async () => {
+      const sm = makeSessionManager({ serverDid: "did:web:example.com:server" });
+      const request = makeRequest({ audience: "did:web:example.com:server" });
+      const result = await sm.validateHandshake(request);
+
+      expect(result.success).toBe(true);
+      expect(result.session?.audience).toBe("did:web:example.com:server");
+    });
+
+    it("should accept handshake when serverDid is not configured (backward compat)", async () => {
+      const sm = makeSessionManager(); // No serverDid configured
+      const request = makeRequest({ audience: "any-audience" });
+      const result = await sm.validateHandshake(request);
+
+      expect(result.success).toBe(true);
     });
   });
 });

@@ -142,6 +142,12 @@ export interface MCPIMiddleware {
  * @param config - Agent identity and session configuration
  * @param cryptoProvider - Platform-specific crypto implementation
  * @returns Middleware components for session management and proof generation
+ *
+ * @remarks
+ * **Single-process only**: This middleware stores session state in memory using closure
+ * variables (`activeSessionId`, `sessionNonces`). It is NOT suitable for multi-instance
+ * deployments behind a load balancer. For distributed deployments, implement a custom
+ * `SessionStore` backed by Redis, DynamoDB, or similar and pass it via `config.session`.
  */
 export function createMCPIMiddleware(
   config: MCPIConfig,

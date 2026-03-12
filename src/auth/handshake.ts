@@ -171,6 +171,20 @@ export class MemoryResumeTokenStore implements ResumeTokenStore {
   }
 }
 
+/**
+ * Verify agent delegation or return authorization hints.
+ *
+ * Orchestrates the authorization flow:
+ * 1. Optionally check agent reputation against threshold
+ * 2. Verify existing delegation via DelegationVerifier
+ * 3. Return authorization hints if delegation is missing/invalid
+ *
+ * @param agentDid - The agent's DID to verify
+ * @param scopes - Required scopes for the operation
+ * @param config - Authorization configuration including verifier, token store, etc.
+ * @param _resumeToken - Optional resume token from previous authorization attempt
+ * @returns Result indicating authorization status, delegation, or auth hints
+ */
 export async function verifyOrHints(
   agentDid: string,
   scopes: string[],
@@ -367,7 +381,7 @@ async function buildNeedsAuthorizationError(
     title: 'Authorization Required',
     hint: ['link', 'qr'],
     authorizationCode: authCode,
-    qrUrl: `https://chart.googleapis.com/chart?cht=qr&chs=300x300&chl=${encodeURIComponent(authUrl.toString())}`,
+    qrUrl: `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(authUrl.toString())}`,
   };
 
   return createNeedsAuthorizationError({
