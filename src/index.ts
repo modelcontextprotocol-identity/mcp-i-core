@@ -131,6 +131,14 @@ export {
   publicKeyToJwk,
 } from './delegation/did-key-resolver.js';
 
+export {
+  DidWebResolver,
+  createDidWebResolver,
+  isDidWeb,
+  parseDidWeb,
+  didWebToUrl,
+} from './delegation/did-web-resolver.js';
+
 // Utils
 export {
   base58Encode,

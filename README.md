@@ -18,7 +18,7 @@ Spec: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.i
 
 | Module | Description |
 |--------|-------------|
-| **delegation** | W3C VC delegation issuance (`DelegationCredentialIssuer`), verification (`DelegationCredentialVerifier`), graph management, StatusList2021 revocation, cascading revocation, and DID:key resolution (`createDidKeyResolver`) |
+| **delegation** | W3C VC delegation issuance (`DelegationCredentialIssuer`), verification (`DelegationCredentialVerifier`), graph management, StatusList2021 revocation, cascading revocation, DID:key resolution (`createDidKeyResolver`), and DID:web resolution (`createDidWebResolver`) |
 | **proof** | Platform-agnostic proof generation (`ProofGenerator`) and server-side verification (`ProofVerifier`) — JCS canonicalization, SHA-256 hashing, Ed25519 JWS signing/verification |
 | **session** | Handshake validation and session management (`SessionManager`) with nonce replay prevention |
 | **auth** | Authorization handshake orchestration (`verifyOrHints`) — checks delegation and returns authorization hints |
