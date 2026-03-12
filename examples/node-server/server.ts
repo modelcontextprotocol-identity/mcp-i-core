@@ -4,15 +4,19 @@
  *
  * Demonstrates the MCP-I protocol:
  *   1. greet           — open tool with signed proof (via _meta)
- *   2. restricted_greet — protected tool requiring delegation
+ *   2. restricted_greet — protected tool requiring a W3C Delegation Credential
  *
  * Sessions are created automatically — no manual handshake needed.
  * In production, MCP-I-aware clients handle the handshake transparently.
  *
- * Start server:
- *   npx tsx examples/node-server/server.ts
- *
- * Then connect MCP Inspector (SSE) to http://localhost:3001/sse
+ * Full demo flow:
+ *   1. Start server:
+ *        npx tsx examples/node-server/server.ts
+ *   2. Issue a delegation VC:
+ *        npx tsx examples/node-server/issue-delegation.ts > delegation.json
+ *   3. Connect MCP Inspector to http://localhost:3001/sse
+ *   4. Call `restricted_greet` with `_mcpi_delegation` = contents of delegation.json
+ *   5. Watch it verify the VC and return the greeting with a signed proof
  */
 
 import http from 'node:http';
@@ -27,16 +31,6 @@ import { createMCPIMiddleware } from '../../src/middleware/with-mcpi.js';
 import { generateDidKeyFromBase64 } from '../../src/utils/did-helpers.js';
 import { NodeCryptoProvider } from './node-crypto.js';
 
-// ── Tool protection config ─────────────────────────────────────────
-// In production this comes from AgentShield remote config.
-// Here we hard-code it to demonstrate the architecture.
-const TOOL_PROTECTION: Record<string, { scopeId: string; consentUrl: string }> = {
-  restricted_greet: {
-    scopeId: 'greeting:restricted',
-    consentUrl: 'https://example.com/consent?scope=greeting:restricted',
-  },
-};
-
 function createMcpServer(mcpi: ReturnType<typeof createMCPIMiddleware>) {
   const server = new Server(
     { name: 'mcpi-example', version: '1.0.0' },
@@ -48,6 +42,18 @@ function createMcpServer(mcpi: ReturnType<typeof createMCPIMiddleware>) {
   const greetHandler = mcpi.wrapWithProof('greet', async (args) => ({
     content: [{ type: 'text', text: `Hello, ${args['name'] ?? 'world'}!` }],
   }));
+
+  // restricted_greet: verify delegation VC, then attach proof on success
+  const restrictedGreetHandler = mcpi.wrapWithDelegation(
+    'restricted_greet',
+    {
+      scopeId: 'greeting:restricted',
+      consentUrl: 'https://example.com/consent?scope=greeting:restricted',
+    },
+    mcpi.wrapWithProof('restricted_greet', async (args) => ({
+      content: [{ type: 'text', text: `Hello, ${args['name'] ?? 'world'}! (delegation verified)` }],
+    })),
+  );
 
   // ── Request handlers ────────────────────────────────────────────
 
@@ -70,6 +76,10 @@ function createMcpServer(mcpi: ReturnType<typeof createMCPIMiddleware>) {
           type: 'object' as const,
           properties: {
             name: { type: 'string', description: 'Name to greet' },
+            _mcpi_delegation: {
+              type: 'object',
+              description: 'W3C Delegation Credential granting scope greeting:restricted',
+            },
           },
         },
       },
@@ -84,26 +94,14 @@ function createMcpServer(mcpi: ReturnType<typeof createMCPIMiddleware>) {
       return mcpi.handleHandshake(args as Record<string, unknown>);
     }
 
-    // ── Tool protection check ───────────────────────────────────
-    const protection = TOOL_PROTECTION[name];
-    if (protection) {
-      // In production, MCP-I checks the delegation chain via the verifier.
-      // Without a valid delegation credential, the server returns a consent
-      // URL that the agent can present to the user for authorization.
-      const consentLink = `[Authorize ${name}](${protection.consentUrl})`;
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Authorization required.\n\n${consentLink}\n\nRetry after authorizing.`,
-          },
-        ],
-      };
-    }
-
     // ── Open tools ──────────────────────────────────────────────
     if (name === 'greet') {
       return greetHandler(args as Record<string, unknown>);
+    }
+
+    // ── Protected tools (delegation required) ───────────────────
+    if (name === 'restricted_greet') {
+      return restrictedGreetHandler(args as Record<string, unknown>);
     }
 
     return {

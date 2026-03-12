@@ -181,7 +181,7 @@ export function wrapDelegationAsVC(
     type: ['VerifiableCredential', 'DelegationCredential'],
     issuer: delegation.issuerDid,
     issuanceDate,
-    expirationDate,
+    ...(expirationDate !== undefined && { expirationDate }),
     credentialSubject: {
       id: delegation.subjectDid,
       delegation: {
@@ -192,15 +192,15 @@ export function wrapDelegationAsVC(
         ...(options?.userIdentifier && { userIdentifier: options.userIdentifier }),
         ...(options?.sessionId && { sessionId: options.sessionId }),
         ...(scopes && scopes.length > 0 && { scopes }),
-        controller: delegation.controller,
-        parentId: delegation.parentId,
+        ...(delegation.controller !== undefined && { controller: delegation.controller }),
+        ...(delegation.parentId !== undefined && { parentId: delegation.parentId }),
         constraints: delegation.constraints,
         status: delegation.status,
-        createdAt: delegation.createdAt,
-        metadata: delegation.metadata,
+        ...(delegation.createdAt !== undefined && { createdAt: delegation.createdAt }),
+        ...(delegation.metadata !== undefined && { metadata: delegation.metadata }),
       },
     },
-    credentialStatus: options?.credentialStatus,
+    ...(options?.credentialStatus !== undefined && { credentialStatus: options.credentialStatus }),
   };
 }
 

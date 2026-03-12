@@ -23,6 +23,18 @@ import {
   type ToolResponse,
 } from "../proof/generator.js";
 import { validateHandshakeFormat } from "../session/manager.js";
+import {
+  DelegationCredentialVerifier,
+  type SignatureVerificationFunction,
+} from "../delegation/vc-verifier.js";
+import { createDidKeyResolver } from "../delegation/did-key-resolver.js";
+import {
+  createNeedsAuthorizationError,
+  type DelegationCredential,
+} from "../types/protocol.js";
+import { logger } from "../logging/index.js";
+import { canonicalizeJSON } from "../delegation/utils.js";
+import { base64urlDecodeToBytes, bytesToBase64 } from "../utils/base64.js";
 
 export interface MCPIIdentityConfig {
   did: string;
@@ -105,6 +117,23 @@ export interface MCPIMiddleware {
    * Returns a new handler that appends proof metadata to the response.
    */
   wrapWithProof(toolName: string, handler: MCPIToolHandler): MCPIToolHandler;
+
+  /**
+   * Wrap a tool handler to require a valid W3C Delegation Credential.
+   *
+   * Caller must pass the VC as `_mcpi_delegation` in the tool args.
+   * - If absent: returns a `needs_authorization` response with the consentUrl.
+   * - If present but invalid: returns a structured error with reason.
+   * - If valid with correct scope: strips `_mcpi_delegation` and calls the handler.
+   */
+  wrapWithDelegation(
+    toolName: string,
+    config: {
+      scopeId: string;
+      consentUrl: string;
+    },
+    handler: MCPIToolHandler,
+  ): MCPIToolHandler;
 }
 
 /**
@@ -285,11 +314,156 @@ export function createMCPIMiddleware(
     };
   }
 
+  function wrapWithDelegation(
+    toolName: string,
+    config: { scopeId: string; consentUrl: string },
+    handler: MCPIToolHandler,
+  ): MCPIToolHandler {
+    const didResolver = createDidKeyResolver();
+
+    const signatureVerifier: SignatureVerificationFunction = async (
+      vc: DelegationCredential,
+      publicKeyJwk: unknown,
+    ): Promise<{ valid: boolean; reason?: string }> => {
+      const proof = vc.proof;
+      if (!proof) {
+        return { valid: false, reason: "Missing proof" };
+      }
+
+      const proofValue = proof["proofValue"] as string | undefined;
+      if (!proofValue) {
+        return { valid: false, reason: "Missing proofValue in proof" };
+      }
+
+      // Reconstruct the unsigned VC (without proof) for signature verification
+      const vcRecord = vc as Record<string, unknown>;
+      const vcWithoutProof: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(vcRecord)) {
+        if (k !== "proof") vcWithoutProof[k] = v;
+      }
+      const canonical = canonicalizeJSON(vcWithoutProof);
+      const data = new TextEncoder().encode(canonical);
+
+      // Decode signature from base64url proof value
+      const sigBytes = base64urlDecodeToBytes(proofValue);
+
+      // Get public key from JWK (x is base64url-encoded raw key bytes)
+      const jwk = publicKeyJwk as { x?: string };
+      if (!jwk.x) {
+        return { valid: false, reason: "No x field in publicKeyJwk" };
+      }
+
+      // Convert base64url key to standard base64 for the crypto provider
+      const pubKeyBytes = base64urlDecodeToBytes(jwk.x);
+      const pubKeyBase64 = bytesToBase64(pubKeyBytes);
+
+      const valid = await cryptoProvider.verify(data, sigBytes, pubKeyBase64);
+      return {
+        valid,
+        reason: valid ? undefined : "Signature verification failed",
+      };
+    };
+
+    const verifier = new DelegationCredentialVerifier({
+      didResolver,
+      signatureVerifier,
+    });
+
+    return async (
+      args: Record<string, unknown>,
+      sessionId?: string,
+    ) => {
+      const delegationArg = args["_mcpi_delegation"];
+
+      if (delegationArg === undefined || delegationArg === null) {
+        // No delegation provided — return needs_authorization response
+        const tokenBytes = await cryptoProvider.randomBytes(16);
+        const hex = Array.from(tokenBytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        const resumeToken = [
+          hex.slice(0, 8),
+          hex.slice(8, 12),
+          hex.slice(12, 16),
+          hex.slice(16, 20),
+          hex.slice(20),
+        ].join("-");
+        const expiresAt = Math.floor(Date.now() / 1000) + 300;
+
+        const authError = createNeedsAuthorizationError({
+          message: `Tool "${toolName}" requires delegation with scope: ${config.scopeId}`,
+          authorizationUrl: config.consentUrl,
+          resumeToken,
+          expiresAt,
+          scopes: [config.scopeId],
+        });
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(authError) }],
+        };
+      }
+
+      // Verify the delegation VC
+      const vc = delegationArg as DelegationCredential;
+      const verificationResult = await verifier.verifyDelegationCredential(vc);
+
+      if (!verificationResult.valid) {
+        logger.warn(
+          `[mcpi] Delegation verification failed for "${toolName}": ${verificationResult.reason}`,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "delegation_invalid",
+                reason: verificationResult.reason,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check that required scope is present in credentialSubject.delegation.scopes
+      const scopes = vc.credentialSubject.delegation.scopes;
+      if (!scopes || !scopes.includes(config.scopeId)) {
+        logger.warn(
+          `[mcpi] Delegation missing required scope "${config.scopeId}" for "${toolName}"`,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "delegation_scope_missing",
+                reason: `Required scope "${config.scopeId}" not in delegation scopes`,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Strip _mcpi_delegation from args before passing to handler
+      const cleanArgs: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(args)) {
+        if (k !== "_mcpi_delegation") cleanArgs[k] = v;
+      }
+
+      logger.debug(
+        `[mcpi] Delegation verified for "${toolName}", scope "${config.scopeId}"`,
+      );
+      return handler(cleanArgs, sessionId);
+    };
+  }
+
   return {
     sessionManager,
     proofGenerator,
     handshakeTool,
     handleHandshake,
     wrapWithProof,
+    wrapWithDelegation,
   };
 }
