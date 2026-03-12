@@ -45,12 +45,26 @@ jobs:
         run: npx vitest run --coverage
 
       - name: Product contamination check
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           if grep -rn "kta\|bouncer\|argus\|agentshield\|knowthat\|@kya-os" src/ --include='*.ts'; then
             echo "::error::Product contamination found in src/"
             exit 1
           fi
           echo "No product contamination found"
+
+      - name: Product contamination check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $matches = Get-ChildItem -Path src -Recurse -Include "*.ts" |
+            Select-String -Pattern "kta|bouncer|argus|agentshield|knowthat|@kya-os"
+          if ($matches) {
+            Write-Host "::error::Product contamination found in src/"
+            exit 1
+          }
+          Write-Host "No product contamination found"
 
   codeql:
     name: CodeQL Security Scan
