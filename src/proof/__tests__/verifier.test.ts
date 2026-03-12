@@ -35,7 +35,7 @@ describe('ProofVerifier Security', () => {
     kty: 'OKP',
     crv: 'Ed25519',
     x: 'VCpo2LMLhn6iWku8MKvSLg2ZAoC-nlOyPVQaO3FxVeQ',
-    kid: 'did:key:z123#key-1',
+    kid: 'did:key:z123#keys-1',
   };
 
   const createValidProof = (): DetachedProof => {
@@ -64,7 +64,7 @@ describe('ProofVerifier Security', () => {
       jws,
       meta: {
         did: 'did:key:z123',
-        kid: 'did:key:z123#key-1',
+        kid: 'did:key:z123#keys-1',
         ts: Math.floor(Date.now() / 1000),
         nonce: 'nonce123',
         audience: 'test-audience',
@@ -104,7 +104,7 @@ describe('ProofVerifier Security', () => {
     mockFetchProvider = {
       resolveDID: vi.fn().mockResolvedValue({
         verificationMethod: [{
-          id: 'did:key:z123#key-1',
+          id: 'did:key:z123#keys-1',
           publicKeyJwk: validJwk,
         }],
       }),
@@ -417,7 +417,7 @@ describe('ProofVerifier Security', () => {
 
   describe('fetchPublicKeyFromDID', () => {
     it('should fetch public key from DID document', async () => {
-      const jwk = await proofVerifier.fetchPublicKeyFromDID('did:key:z123', 'key-1');
+      const jwk = await proofVerifier.fetchPublicKeyFromDID('did:key:z123', 'keys-1');
 
       expect(jwk).toEqual(validJwk);
       expect(mockFetchProvider.resolveDID).toHaveBeenCalledWith('did:key:z123');
@@ -462,7 +462,7 @@ describe('ProofVerifier Security', () => {
     it('should throw ProofVerificationError if JWK is not Ed25519', async () => {
       mockFetchProvider.resolveDID = vi.fn().mockResolvedValue({
         verificationMethod: [{
-          id: 'did:key:z123#key-1',
+          id: 'did:key:z123#keys-1',
           publicKeyJwk: {
             kty: 'RSA',
             crv: 'RS256',

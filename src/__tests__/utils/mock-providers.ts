@@ -261,7 +261,7 @@ export class MockIdentityProvider extends IdentityProvider {
     if (!this.identity) {
       this.identity = {
         did: 'did:key:zmock123',
-        kid: 'did:key:zmock123#key-1',
+        kid: 'did:key:zmock123#keys-1',
         privateKey: 'mock-private-key',
         publicKey: 'mock-public-key',
         createdAt: new Date().toISOString(),
@@ -281,7 +281,7 @@ export class MockIdentityProvider extends IdentityProvider {
     this.rotateCount++;
     this.identity = {
       did: `did:key:zmock456-${this.rotateCount}`,
-      kid: `did:key:zmock456-${this.rotateCount}#key-1`,
+      kid: `did:key:zmock456-${this.rotateCount}#keys-1`,
       privateKey: `mock-private-key-rotated-${this.rotateCount}`,
       publicKey: `mock-public-key-rotated-${this.rotateCount}`,
       createdAt: new Date().toISOString(),
