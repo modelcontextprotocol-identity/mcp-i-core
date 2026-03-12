@@ -111,6 +111,13 @@ export {
 } from './delegation/outbound-proof.js';
 
 export {
+  buildOutboundDelegationHeaders,
+  OUTBOUND_HEADER_NAMES,
+  type OutboundDelegationContext,
+  type OutboundDelegationHeaders,
+} from './delegation/outbound-headers.js';
+
+export {
   canonicalizeJSON,
   createUnsignedVCJWT,
   completeVCJWT,
