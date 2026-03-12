@@ -116,7 +116,7 @@ export class MemoryIdentityProvider extends IdentityProvider {
 
     return {
       did,
-      kid: `${did}#key-1`,
+      kid: `${did}#keys-1`,
       privateKey: keyPair.privateKey,
       publicKey: keyPair.publicKey,
       createdAt: new Date().toISOString(),

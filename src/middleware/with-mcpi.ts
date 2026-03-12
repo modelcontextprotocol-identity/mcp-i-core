@@ -34,7 +34,7 @@ import {
 } from "../types/protocol.js";
 import { logger } from "../logging/index.js";
 import { canonicalizeJSON } from "../delegation/utils.js";
-import { base64urlDecodeToBytes, bytesToBase64 } from "../utils/base64.js";
+import { base64urlDecodeToBytes, base64urlEncodeFromBytes, bytesToBase64 } from "../utils/base64.js";
 
 export interface MCPIIdentityConfig {
   did: string;
@@ -253,8 +253,9 @@ export function createMCPIMiddleware(
 
     if (!config.autoSession) return undefined;
 
-    // Generate a server-side session with a random nonce
-    const nonce = `auto-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    // Generate a server-side session with cryptographically random nonce (SPEC.md §4)
+    const nonceBytes = await cryptoProvider.randomBytes(16);
+    const nonce = base64urlEncodeFromBytes(nonceBytes);
     const timestamp = Math.floor(Date.now() / 1000);
 
     const result = await sessionManager.validateHandshake({

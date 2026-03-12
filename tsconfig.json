@@ -12,7 +12,7 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noUncheckedIndexedAccess": false,
+    "noUncheckedIndexedAccess": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true
   },

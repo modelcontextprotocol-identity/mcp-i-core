@@ -12,7 +12,10 @@ const ALPHABET_MAP = new Map<string, number>();
 
 // Build reverse lookup map
 for (let i = 0; i < ALPHABET.length; i++) {
-  ALPHABET_MAP.set(ALPHABET[i], i);
+  const char = ALPHABET[i];
+  if (char !== undefined) {
+    ALPHABET_MAP.set(char, i);
+  }
 }
 
 /**
@@ -27,7 +30,10 @@ export function base58Encode(bytes: Uint8Array): string {
   // Convert bytes to big integer
   let num = BigInt(0);
   for (let i = 0; i < bytes.length; i++) {
-    num = num * BigInt(256) + BigInt(bytes[i]);
+    const byte = bytes[i];
+    if (byte !== undefined) {
+      num = num * BigInt(256) + BigInt(byte);
+    }
   }
 
   // Convert to base58
