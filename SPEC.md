@@ -15,6 +15,12 @@ MCP-I (Model Context Protocol Identity) is a protocol extension for the Model Co
 
 ---
 
+## Conformance Keywords
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119].
+
+---
+
 ## Status
 
 **Draft** — Submitted to DIF TAAWG (Decentralized Identity Foundation, Trust and Authorization for AI Agents Working Group) for review. Not yet a standard.
@@ -682,7 +688,51 @@ MCP-I servers SHOULD expose `/.well-known/mcpi`:
 
 ---
 
-## 12. Conformance
+## 12. Privacy Considerations
+
+### 12.1 DID Correlation
+
+A persistent `did:key` or `did:web` identifier acts as a pseudonym. Using the same DID across multiple MCP servers enables cross-server activity correlation. Implementations SHOULD consider per-server DID rotation for privacy-sensitive deployments.
+
+### 12.2 Session Linkability
+
+Session IDs (`mcpi_*`) appear in detached proofs. Within a session, all tool calls are linkable. Implementations SHOULD use short session TTLs and avoid logging session IDs alongside PII.
+
+### 12.3 Delegation Chain Disclosure
+
+Outbound `X-Agent-DID` and `X-Delegation-Chain` headers reveal the agent's identity and delegation provenance to downstream services. Implementations SHOULD only propagate delegation headers to trusted downstream services.
+
+### 12.4 Proof Retention and Right to Erasure
+
+Detached proofs are audit records containing DIDs and session identifiers. Operators retaining proof logs SHOULD consider applicable data protection regulations (GDPR Art. 17, CCPA) and implement appropriate retention policies.
+
+---
+
+## 13. Protocol Versioning
+
+The current protocol version is `1.0.0`.
+
+Handshake requests SHOULD include `clientProtocolVersion: "1.0.0"`.
+Handshake responses MUST include `protocolVersion: "1.0.0"`.
+
+Servers MUST reject clients with an incompatible major version (e.g., a `2.x` server MUST reject a `1.x` client).
+Minor version differences SHOULD be handled gracefully — servers SHOULD implement backward compatibility within a major version.
+
+---
+
+## 14. Transport Binding
+
+MCP-I is transport-agnostic. The handshake and proofs use standard MCP mechanisms:
+
+**Handshake**: Implemented as an MCP tool named `_mcpi_handshake`. This is compatible with all MCP transports (stdio, SSE, HTTP Streamable) without modification.
+
+**Proof attachment**: Detached proofs are attached to tool responses in the standard MCP `_meta` field, which is transported transparently by all MCP transport implementations.
+
+**Outbound delegation headers**: When an MCP server makes outbound HTTP calls (not MCP calls), delegation context is propagated via HTTP headers as defined in §8. For MCP-to-MCP calls, delegation context SHOULD be passed via the `_mcpi_handshake` flow.
+
+---
+
+## 15. Conformance
 
 Implementation conformance requirements are defined in `CONFORMANCE.md`. Three compliance levels are specified:
 
@@ -694,10 +744,11 @@ See `CONFORMANCE.md` for detailed requirements and test references.
 
 ---
 
-## 13. References
+## 16. References
 
 ### Normative References
 
+- **[RFC 2119]** IETF. *Key words for use in RFCs to Indicate Requirement Levels*. https://datatracker.ietf.org/doc/html/rfc2119
 - **[DID-CORE]** W3C. *Decentralized Identifiers (DIDs) v1.0*. https://www.w3.org/TR/did-core/
 - **[VC-DATA-MODEL]** W3C. *Verifiable Credentials Data Model v1.1*. https://www.w3.org/TR/vc-data-model/
 - **[DID-KEY]** W3C CCG. *did:key Method Specification*. https://w3c-ccg.github.io/did-method-key/
@@ -737,6 +788,104 @@ See `CONFORMANCE.md` for detailed requirements and test references.
 ```
 
 Note: Excludes `0`, `O`, `I`, `l` to avoid visual ambiguity.
+
+---
+
+## Appendix C: Test Vectors
+
+These test vectors enable interoperability testing across implementations.
+
+### C.1 SHA-256 Canonical Hash
+
+**Input JSON:**
+```json
+{"method":"tools/call","params":{"name":"echo","arguments":{}}}
+```
+
+**JCS Canonicalized (RFC 8785):**
+```json
+{"method":"tools/call","params":{"arguments":{},"name":"echo"}}
+```
+
+**SHA-256 (hex):**
+```
+5057521f310b536837b619f0ac040ef8064f8c597da8ec22a56801b435744033
+```
+
+**MCP-I Format:**
+```
+sha256:5057521f310b536837b619f0ac040ef8064f8c597da8ec22a56801b435744033
+```
+
+### C.2 did:key Derivation
+
+**Ed25519 Public Key (32 bytes, hex):**
+```
+8076ee2cfc1acdd3f8f4e38c665a0a3e6ad6e06dc05b4f6ec9c5b1ae7c81c9a2
+```
+
+**Steps:**
+1. Prepend multicodec prefix `0xed01` (Ed25519 public key)
+2. Encode with base58btc
+3. Prepend multibase prefix `z`
+
+**Multicodec + Key (hex):**
+```
+ed018076ee2cfc1acdd3f8f4e38c665a0a3e6ad6e06dc05b4f6ec9c5b1ae7c81c9a2
+```
+
+**Base58btc Encoded:**
+```
+6Mko6jQvza2BSKRcrbJwgwbL9KYDn1isCUV5Lnq7gSTTKJq
+```
+
+**did:key:**
+```
+did:key:z6Mko6jQvza2BSKRcrbJwgwbL9KYDn1isCUV5Lnq7gSTTKJq
+```
+
+**Verification Method ID:**
+```
+did:key:z6Mko6jQvza2BSKRcrbJwgwbL9KYDn1isCUV5Lnq7gSTTKJq#keys-1
+```
+
+### C.3 JWS Structure
+
+A valid detached proof JWS has the following structure:
+
+**Protected Header (decoded):**
+```json
+{
+  "alg": "EdDSA",
+  "kid": "did:key:z6Mk...#keys-1"
+}
+```
+
+**Payload (decoded, canonicalized):**
+```json
+{
+  "aud": "did:web:server.example.com",
+  "iss": "did:web:server.example.com",
+  "nonce": "abc123...",
+  "requestHash": "sha256:5057521f...",
+  "responseHash": "sha256:d4e5f6...",
+  "sessionId": "mcpi_d7f8a9b0-...",
+  "sub": "did:web:server.example.com",
+  "ts": 1710288000
+}
+```
+
+**Signature:**
+```
+Ed25519Sign(privateKey, BASE64URL(header) || "." || BASE64URL(canonicalize(payload)))
+```
+
+**Compact JWS:**
+```
+<base64url-header>.<base64url-payload>.<base64url-signature>
+```
+
+Note: Actual signature values are key-dependent. Implementers should verify the structure and use the test key material from the reference implementation's test suite for bit-exact validation.
 
 ---
 
