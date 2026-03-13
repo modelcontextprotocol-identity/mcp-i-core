@@ -83,10 +83,7 @@ The demo:
 ## Usage in Your Code
 
 ```typescript
-import {
-  buildOutboundDelegationHeaders,
-  CryptoProvider,
-} from '@mcpi/core';
+import { buildOutboundDelegationHeaders } from '@mcpi/core';
 
 // When making an outbound request on behalf of an agent...
 const headers = await buildOutboundDelegationHeaders({
@@ -98,7 +95,7 @@ const headers = await buildOutboundDelegationHeaders({
     privateKey: serverPrivateKey,
   },
   targetUrl: 'https://downstream-api.example.com/resource',
-}, cryptoProvider);
+});
 
 // Attach headers to your HTTP request
 const response = await fetch(targetUrl, {

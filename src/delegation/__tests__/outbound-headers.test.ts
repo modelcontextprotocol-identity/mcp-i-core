@@ -18,23 +18,19 @@ import { generateDidKeyFromBase64 } from '../../utils/did-helpers.js';
 // Test fixtures
 // ---------------------------------------------------------------------------
 
-let cryptoProvider: NodeCryptoProvider;
 let serverKeyPair: { privateKey: string; publicKey: string };
 let serverDid: string;
 let serverKid: string;
-let agentKeyPair: { privateKey: string; publicKey: string };
 let agentDid: string;
 
 beforeAll(async () => {
-  cryptoProvider = new NodeCryptoProvider();
+  const cryptoProvider = new NodeCryptoProvider();
 
-  // Generate server identity
   serverKeyPair = await cryptoProvider.generateKeyPair();
   serverDid = generateDidKeyFromBase64(serverKeyPair.publicKey);
   serverKid = `${serverDid}#keys-1`;
 
-  // Generate agent identity
-  agentKeyPair = await cryptoProvider.generateKeyPair();
+  const agentKeyPair = await cryptoProvider.generateKeyPair();
   agentDid = generateDidKeyFromBase64(agentKeyPair.publicKey);
 });
 
@@ -92,7 +88,7 @@ function createTestContext(
 describe('buildOutboundDelegationHeaders', () => {
   it('builds correct headers from a valid session + delegation', async () => {
     const context = createTestContext();
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     expect(headers).toHaveProperty('X-Agent-DID');
     expect(headers).toHaveProperty('X-Delegation-Chain');
@@ -102,28 +98,28 @@ describe('buildOutboundDelegationHeaders', () => {
 
   it('X-Agent-DID matches session.agentDid', async () => {
     const context = createTestContext();
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     expect(headers['X-Agent-DID']).toBe(context.session.agentDid);
   });
 
   it('X-Delegation-Chain matches delegation.vcId', async () => {
     const context = createTestContext();
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     expect(headers['X-Delegation-Chain']).toBe(context.delegation.vcId);
   });
 
   it('X-Session-ID matches session.sessionId', async () => {
     const context = createTestContext();
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     expect(headers['X-Session-ID']).toBe(context.session.sessionId);
   });
 
   it('X-Delegation-Proof is a valid JWT with correct claims', async () => {
     const context = createTestContext();
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     const jwt = headers['X-Delegation-Proof'];
 
@@ -150,7 +146,7 @@ describe('buildOutboundDelegationHeaders', () => {
     const context = createTestContext({
       targetUrl: 'https://api.service.example.com:8443/v1/resource?query=test',
     });
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     const payload = decodeJwt(headers['X-Delegation-Proof']);
     expect(payload.aud).toBe('api.service.example.com');
@@ -160,7 +156,7 @@ describe('buildOutboundDelegationHeaders', () => {
     const context = createTestContext({
       targetUrl: 'http://internal-service.local/api',
     });
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     const payload = decodeJwt(headers['X-Delegation-Proof']);
     expect(payload.aud).toBe('internal-service.local');
@@ -170,7 +166,7 @@ describe('buildOutboundDelegationHeaders', () => {
     const context = createTestContext({
       targetUrl: 'https://secure.example.org/endpoint',
     });
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     const payload = decodeJwt(headers['X-Delegation-Proof']);
     expect(payload.aud).toBe('secure.example.org');
@@ -178,7 +174,7 @@ describe('buildOutboundDelegationHeaders', () => {
 
   it('JWT exp is 60 seconds from iat', async () => {
     const context = createTestContext();
-    const headers = await buildOutboundDelegationHeaders(context, cryptoProvider);
+    const headers = await buildOutboundDelegationHeaders(context);
 
     const payload = decodeJwt(headers['X-Delegation-Proof']);
     expect((payload.exp as number) - (payload.iat as number)).toBe(60);
@@ -190,7 +186,7 @@ describe('buildOutboundDelegationHeaders', () => {
     });
 
     await expect(
-      buildOutboundDelegationHeaders(context, cryptoProvider)
+      buildOutboundDelegationHeaders(context)
     ).rejects.toThrow('Session must have agentDid');
   });
 
@@ -200,7 +196,7 @@ describe('buildOutboundDelegationHeaders', () => {
     });
 
     await expect(
-      buildOutboundDelegationHeaders(context, cryptoProvider)
+      buildOutboundDelegationHeaders(context)
     ).rejects.toThrow('Session must have sessionId');
   });
 
@@ -210,7 +206,7 @@ describe('buildOutboundDelegationHeaders', () => {
     });
 
     await expect(
-      buildOutboundDelegationHeaders(context, cryptoProvider)
+      buildOutboundDelegationHeaders(context)
     ).rejects.toThrow('Delegation must have vcId');
   });
 
@@ -224,7 +220,7 @@ describe('buildOutboundDelegationHeaders', () => {
     });
 
     await expect(
-      buildOutboundDelegationHeaders(context, cryptoProvider)
+      buildOutboundDelegationHeaders(context)
     ).rejects.toThrow('Server DID must be did:key with Ed25519');
   });
 });
