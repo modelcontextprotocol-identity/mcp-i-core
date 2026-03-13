@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schema.modelcontextprotocol-identity.io/mcpi/well-known-mcpi.json",
+  "$id": "https://schema.modelcontextprotocol-identity.io/xmcp-i/discovery/well-known-mcpi.v1.0.0.json",
   "title": "MCP-I Discovery Document",
   "description": "Well-known discovery document served at /.well-known/mcpi for MCP-I service discovery.",
   "type": "object",

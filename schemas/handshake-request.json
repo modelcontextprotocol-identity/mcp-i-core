@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schema.modelcontextprotocol-identity.io/mcpi/handshake-request.json",
+  "$id": "https://schema.modelcontextprotocol-identity.io/xmcp-i/handshake/handshake-request.v1.0.0.json",
   "title": "MCP-I Handshake Request",
   "description": "Client-initiated handshake request to establish an MCP-I session with nonce-based replay protection.",
   "type": "object",
