@@ -1,0 +1,4 @@
+# Private key material — never commit
+.mcpi/
+node_modules/
+dist/

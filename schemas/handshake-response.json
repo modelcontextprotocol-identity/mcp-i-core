@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.modelcontextprotocol-identity.io/xmcp-i/handshake/handshake-response.v1.0.0.json",
+  "title": "MCP-I Handshake Response",
+  "description": "Server response to a successful handshake request, establishing session context.",
+  "type": "object",
+  "required": ["sessionId", "serverDid", "protocolVersion"],
+  "properties": {
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique session identifier. Clients MUST include this in subsequent requests."
+    },
+    "serverDid": {
+      "type": "string",
+      "pattern": "^did:(key|web):.+$",
+      "description": "The server's DID used for proof verification."
+    },
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Negotiated MCP-I protocol version (e.g., '1.0')."
+    },
+    "serverCapabilities": {
+      "type": "object",
+      "description": "Server capability flags indicating supported features.",
+      "properties": {
+        "proofs": {
+          "type": "boolean",
+          "description": "Server supports detached proofs on tool responses."
+        },
+        "delegation": {
+          "type": "boolean",
+          "description": "Server supports W3C delegation credentials."
+        },
+        "statusList": {
+          "type": "boolean",
+          "description": "Server supports StatusList2021 revocation checking."
+        }
+      },
+      "additionalProperties": true
+    },
+    "sessionTtl": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Session time-to-live in seconds. Client SHOULD refresh before expiration."
+    },
+    "nonce": {
+      "type": "string",
+      "description": "Echo of the client's nonce for binding verification."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "sessionId": "sess_abc123xyz",
+      "serverDid": "did:web:api.example.com",
+      "protocolVersion": "1.0",
+      "serverCapabilities": {
+        "proofs": true,
+        "delegation": true,
+        "statusList": true
+      },
+      "sessionTtl": 1800
+    }
+  ]
+}

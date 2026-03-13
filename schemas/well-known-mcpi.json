@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.modelcontextprotocol-identity.io/xmcp-i/discovery/well-known-mcpi.v1.0.0.json",
+  "title": "MCP-I Discovery Document",
+  "description": "Well-known discovery document served at /.well-known/mcpi for MCP-I service discovery.",
+  "type": "object",
+  "required": ["version", "serverDid", "endpoints"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "MCP-I protocol version supported by this server."
+    },
+    "serverDid": {
+      "type": "string",
+      "pattern": "^did:(key|web):.+$",
+      "description": "Server's DID for identity verification and proof validation."
+    },
+    "endpoints": {
+      "type": "object",
+      "required": ["handshake"],
+      "properties": {
+        "handshake": {
+          "type": "string",
+          "format": "uri-reference",
+          "description": "Relative or absolute URL for the handshake endpoint."
+        },
+        "tools": {
+          "type": "string",
+          "format": "uri-reference",
+          "description": "Relative or absolute URL for the MCP tools endpoint."
+        },
+        "delegation": {
+          "type": "string",
+          "format": "uri-reference",
+          "description": "Relative or absolute URL for delegation management."
+        },
+        "authorization": {
+          "type": "string",
+          "format": "uri-reference",
+          "description": "URL for user authorization flow initiation."
+        }
+      },
+      "additionalProperties": {
+        "type": "string",
+        "format": "uri-reference"
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Server capabilities for feature discovery.",
+      "properties": {
+        "proofs": {
+          "type": "boolean",
+          "description": "Server generates detached proofs for tool responses."
+        },
+        "delegation": {
+          "type": "boolean",
+          "description": "Server supports W3C delegation credentials."
+        },
+        "statusList": {
+          "type": "boolean",
+          "description": "Server supports StatusList2021 revocation checking."
+        },
+        "crisp": {
+          "type": "boolean",
+          "description": "Server supports CRISP constraint evaluation."
+        }
+      },
+      "additionalProperties": true
+    },
+    "publicKeys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "publicKeyJwk"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Key identifier (matches kid in JWS headers)."
+          },
+          "type": {
+            "type": "string",
+            "description": "Key type (e.g., 'JsonWebKey2020', 'Ed25519VerificationKey2020')."
+          },
+          "controller": {
+            "type": "string",
+            "pattern": "^did:.+$",
+            "description": "DID that controls this key."
+          },
+          "publicKeyJwk": {
+            "type": "object",
+            "required": ["kty", "crv", "x"],
+            "properties": {
+              "kty": {
+                "type": "string",
+                "const": "OKP"
+              },
+              "crv": {
+                "type": "string",
+                "const": "Ed25519"
+              },
+              "x": {
+                "type": "string",
+                "description": "Base64url-encoded public key."
+              },
+              "kid": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "description": "Public keys for signature verification (alternative to DID resolution)."
+    },
+    "statusListCredential": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL of the StatusList2021 credential for revocation checking."
+    },
+    "contact": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "description": "Contact information for the service operator."
+    }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "version": "1.0",
+      "serverDid": "did:web:api.example.com",
+      "endpoints": {
+        "handshake": "/mcpi/handshake",
+        "tools": "/mcpi/tools",
+        "delegation": "/mcpi/delegations",
+        "authorization": "https://auth.example.com/authorize"
+      },
+      "capabilities": {
+        "proofs": true,
+        "delegation": true,
+        "statusList": true,
+        "crisp": true
+      },
+      "publicKeys": [
+        {
+          "id": "did:web:api.example.com#key-1",
+          "type": "JsonWebKey2020",
+          "controller": "did:web:api.example.com",
+          "publicKeyJwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+          }
+        }
+      ],
+      "statusListCredential": "https://api.example.com/credentials/status/1",
+      "contact": {
+        "name": "Example API Support",
+        "email": "support@example.com",
+        "url": "https://example.com/support"
+      }
+    }
+  ]
+}

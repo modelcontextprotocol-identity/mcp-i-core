@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: ['20.x', '22.x']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+      - name: Coverage
+        run: npx vitest run --coverage
+
+      - name: Product contamination check
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if grep -rn "kta\|bouncer\|argus\|agentshield\|knowthat\|@kya-os" src/ --include='*.ts'; then
+            echo "::error::Product contamination found in src/"
+            exit 1
+          fi
+          echo "No product contamination found"
+
+      - name: Product contamination check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $matches = Get-ChildItem -Path src -Recurse -Include "*.ts" |
+            Select-String -Pattern "kta|bouncer|argus|agentshield|knowthat|@kya-os"
+          if ($matches) {
+            Write-Host "::error::Product contamination found in src/"
+            exit 1
+          }
+          Write-Host "No product contamination found"
+
+  codeql:
+    name: CodeQL Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: typescript
+      - uses: github/codeql-action/analyze@v3

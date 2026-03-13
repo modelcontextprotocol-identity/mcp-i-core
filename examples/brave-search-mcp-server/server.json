@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.brave/brave-search-mcp-server",
+  "description": "Brave Search MCP Server: web results, images, videos, rich results, AI summaries, and more.",
+  "version": "2.0.75",
+  "repository": {
+    "url": "https://github.com/brave/brave-search-mcp-server",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@brave/brave-search-mcp-server",
+      "version": "2.0.75",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BRAVE_API_KEY",
+          "description": "Your API key for the service",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

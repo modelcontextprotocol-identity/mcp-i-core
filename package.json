@@ -1,0 +1,110 @@
+{
+  "name": "@mcp-i/core",
+  "version": "1.1.0-canary.2",
+  "description": "Core library for MCP-I — delegation, proof, and session primitives for Model Context Protocol Identity",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./delegation": {
+      "types": "./dist/delegation/index.d.ts",
+      "default": "./dist/delegation/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "default": "./dist/auth/index.js"
+    },
+    "./proof": {
+      "types": "./dist/proof/index.d.ts",
+      "default": "./dist/proof/index.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "default": "./dist/session/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "default": "./dist/providers/index.js"
+    },
+    "./logging": {
+      "types": "./dist/logging/index.d.ts",
+      "default": "./dist/logging/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/protocol.d.ts",
+      "default": "./dist/types/protocol.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.ts",
+      "default": "./dist/middleware/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist",
+    "example:server": "npx tsx examples/node-server/server.ts",
+    "example:inspector": "npx @modelcontextprotocol/inspector npx tsx examples/node-server/server.ts --stdio"
+  },
+  "dependencies": {
+    "jose": "^5.6.3",
+    "json-canonicalize": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@kya-os/consent": "^0.1.37",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.14.9",
+    "@typescript-eslint/eslint-plugin": "^8.57.0",
+    "@typescript-eslint/parser": "^8.57.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "commander": "^14.0.3",
+    "eslint": "^10.0.3",
+    "express": "^5.2.1",
+    "typescript": "^5.5.3",
+    "typescript-eslint": "^8.57.0",
+    "vitest": "^2.0.0",
+    "zod": "^4.3.6"
+  },
+  "keywords": [
+    "mcp-i",
+    "mcp",
+    "delegation",
+    "verifiable-credentials",
+    "did",
+    "protocol",
+    "identity",
+    "dif"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/modelcontextprotocol-identity/mcp-i-core"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

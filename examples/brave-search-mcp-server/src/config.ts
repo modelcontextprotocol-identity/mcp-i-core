@@ -1,0 +1,190 @@
+import { LoggingLevel, LoggingLevelSchema } from '@modelcontextprotocol/sdk/types.js';
+import { Command } from 'commander';
+import dotenv from 'dotenv';
+import { z } from 'zod';
+import tools from './tools/index.js';
+
+dotenv.config({ debug: false, quiet: true });
+
+// Config schema for Smithery.ai
+export const configSchema = z.object({
+  braveApiKey: z
+    .string()
+    .describe('Your API key')
+    .default(process.env.BRAVE_API_KEY ?? ''),
+  enabledTools: z
+    .array(z.string())
+    .describe('Enforces a tool whitelist (cannot be used with disabledTools)')
+    .optional(),
+  disabledTools: z
+    .array(z.string())
+    .describe('Enforces a tool blacklist (cannot be used with enabledTools)')
+    .optional(),
+  loggingLevel: z
+    .enum([
+      'debug',
+      'error',
+      'info',
+      'notice',
+      'warning',
+      'critical',
+      'alert',
+      'emergency',
+    ] as const)
+    .default('info')
+    .describe('Desired logging level')
+    .optional(),
+  stateless: z
+    .boolean()
+    .default(false)
+    .describe('Whether the server should be stateless')
+    .optional(),
+});
+
+export type SmitheryConfig = z.infer<typeof configSchema>;
+
+type Configuration = {
+  transport: 'stdio' | 'http';
+  port: number;
+  host: string;
+  braveApiKey: string;
+  loggingLevel: LoggingLevel;
+  enabledTools: string[];
+  disabledTools: string[];
+  stateless: boolean;
+};
+
+const state: Configuration & { ready: boolean } = {
+  transport: 'stdio',
+  port: 8080,
+  host: '0.0.0.0',
+  braveApiKey: process.env.BRAVE_API_KEY ?? '',
+  loggingLevel: 'info',
+  ready: false,
+  enabledTools: [],
+  disabledTools: [],
+  stateless: false,
+};
+
+export function isToolPermittedByUser(toolName: string): boolean {
+  return state.enabledTools.length > 0
+    ? state.enabledTools.includes(toolName)
+    : state.disabledTools.includes(toolName) === false;
+}
+
+export function getOptions(): Configuration | false {
+  const program = new Command()
+    .option('--brave-api-key <string>', 'Brave API key', process.env.BRAVE_API_KEY ?? '')
+    .option('--logging-level <string>', 'Logging level', process.env.BRAVE_MCP_LOG_LEVEL ?? 'info')
+    .option(
+      '--transport <stdio|http>',
+      'transport type',
+      process.env.BRAVE_MCP_TRANSPORT ?? 'stdio'
+    )
+    .option(
+      '--enabled-tools <names...>',
+      'tools to enable',
+      process.env.BRAVE_MCP_ENABLED_TOOLS?.trim().split(' ') ?? []
+    )
+    .option(
+      '--disabled-tools <names...>',
+      'tools to disable',
+      process.env.BRAVE_MCP_DISABLED_TOOLS?.trim().split(' ') ?? []
+    )
+    .option(
+      '--port <number>',
+      'desired port for HTTP transport',
+      process.env.BRAVE_MCP_PORT ?? '8080'
+    )
+    .option(
+      '--host <string>',
+      'desired host for HTTP transport',
+      process.env.BRAVE_MCP_HOST ?? '0.0.0.0'
+    )
+    .option(
+      '--stateless <boolean>',
+      'whether the server should be stateless',
+      process.env.BRAVE_MCP_STATELESS === 'true' ? true : false
+    )
+    .allowUnknownOption()
+    .parse(process.argv);
+
+  const options = program.opts();
+  const toolNames = Object.values(tools).map((tool) => tool.name);
+
+  // Validate tool inclusion configuration
+  const enabledTools = options.enabledTools.filter((t: string) => t.trim().length > 0);
+  const disabledTools = options.disabledTools.filter((t: string) => t.trim().length > 0);
+
+  if (enabledTools.length > 0 && disabledTools.length > 0) {
+    console.error('Error: --enabled-tools and --disabled-tools cannot be used together');
+    return false;
+  }
+
+  if (
+    [...enabledTools, ...disabledTools].some(
+      (t) => t.trim().length > 0 && !toolNames.includes(t.trim())
+    )
+  ) {
+    console.error(`Invalid tool name used. Must be one of: ${toolNames.join(', ')}`);
+    return false;
+  }
+
+  // Validate all other options
+  if (!['stdio', 'http'].includes(options.transport)) {
+    console.error(
+      `Invalid --transport value: '${options.transport}'. Must be one of: stdio, http.`
+    );
+    return false;
+  }
+
+  if (!LoggingLevelSchema.options.includes(options.loggingLevel)) {
+    console.error(
+      `Invalid --logging-level value: '${options.loggingLevel}'. Must be one of: ${LoggingLevelSchema.options.join(', ')}`
+    );
+    return false;
+  }
+
+  if (!options.braveApiKey) {
+    console.error(
+      'Error: --brave-api-key is required. You can get one at https://brave.com/search/api/.'
+    );
+    return false;
+  }
+
+  if (options.transport === 'http') {
+    if (options.port < 1 || options.port > 65535) {
+      console.error(
+        `Invalid --port value: '${options.port}'. Must be a valid port number between 1 and 65535.`
+      );
+      return false;
+    }
+
+    if (!options.host) {
+      console.error('Error: --host is required');
+      return false;
+    }
+  }
+
+  // Normalize stateless to boolean (CLI passes it as string)
+  options.stateless = options.stateless === true || options.stateless === 'true';
+
+  // Update state
+  state.braveApiKey = options.braveApiKey;
+  state.transport = options.transport;
+  state.port = options.port;
+  state.host = options.host;
+  state.loggingLevel = options.loggingLevel;
+  state.enabledTools = options.enabledTools;
+  state.disabledTools = options.disabledTools;
+  state.stateless = options.stateless;
+  state.ready = true;
+
+  return options as Configuration;
+}
+
+export function setOptions(options: SmitheryConfig) {
+  return Object.assign(state, options);
+}
+
+export default state;

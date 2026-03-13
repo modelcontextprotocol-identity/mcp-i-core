@@ -1,0 +1,23 @@
+{
+  "name": "@mcp-i/example-consent-full",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP-I consent flow with @kya-os/consent — multi-mode auth, configurable branding, and production-grade consent UI",
+  "scripts": {
+    "start": "npx tsx src/server.ts",
+    "start:consent": "npx tsx src/consent-server.ts",
+    "generate-identity": "npx tsx scripts/generate-identity.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@kya-os/consent": "^0.1.37"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
