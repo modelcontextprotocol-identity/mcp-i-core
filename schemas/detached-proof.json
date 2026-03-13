@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.modelcontextprotocol-identity.io/xmcp-i/proof/detached-proof.v1.0.0.json",
+  "title": "MCP-I Detached Proof",
+  "description": "Cryptographic proof binding an MCP tool request/response pair to an agent's identity and session context.",
+  "type": "object",
+  "required": ["jws", "meta"],
+  "properties": {
+    "jws": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      "description": "Compact JWS (header.payload.signature) signed with Ed25519. The payload contains canonicalized proof metadata."
+    },
+    "meta": {
+      "$ref": "#/$defs/ProofMeta"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ProofMeta": {
+      "type": "object",
+      "required": ["did", "kid", "ts", "nonce", "audience", "sessionId", "requestHash", "responseHash"],
+      "properties": {
+        "did": {
+          "type": "string",
+          "pattern": "^did:(key|web):.+$",
+          "description": "Signer's DID."
+        },
+        "kid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Key identifier for the signing key (matches JWS header kid)."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Unix timestamp in seconds when the proof was generated."
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Session nonce from the handshake, binding proof to session."
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Intended audience (server DID or URL)."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Session identifier from handshake response."
+        },
+        "requestHash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "SHA-256 hash of JCS-canonicalized request. Format: 'sha256:<64 hex chars>'."
+        },
+        "responseHash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "SHA-256 hash of JCS-canonicalized response. Format: 'sha256:<64 hex chars>'."
+        },
+        "scopeId": {
+          "type": "string",
+          "description": "Optional scope identifier for fine-grained authorization tracking."
+        },
+        "delegationRef": {
+          "type": "string",
+          "description": "Optional reference to delegation credential authorizing this action."
+        },
+        "clientDid": {
+          "type": "string",
+          "pattern": "^did:.+$",
+          "description": "Optional client DID for multi-party scenarios."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa2hhWGdCWkR2b3REa0w1MjU3ZmFpenRpR2lDMlF0S0xHcGJubkVHdGEyZG9LI3o2TWtoYVhnQlpEdm90RGtMNTI1N2ZhaXp0aUdpQzJRdEtMR3Bibm5FR3RhMmRvSyJ9.eyJhdWQiOiJkaWQ6d2ViOmV4YW1wbGUuY29tIiwic3ViIjoiZGlkOmtleTp6Nk1raGFYZ0JaRHZvdERrTDUyNTdmYWl6dGlHaUMyUXRLTEdwYm5uRUd0YTJkb0siLCJpc3MiOiJkaWQ6a2V5Ono2TWtoYVhnQlpEdm90RGtMNTI1N2ZhaXp0aUdpQzJRdEtMR3Bibm5FR3RhMmRvSyIsInJlcXVlc3RIYXNoIjoic2hhMjU2OjcyYjgwYTRhYTZhYjlmNTNhZThmZTcyN2I2N2I5Y2I3ZjQ5OTk3ZjM2MjE3OTg5OTI3MTI1OGMzMjY1YmZiMWMiLCJyZXNwb25zZUhhc2giOiJzaGEyNTY6MWI0ZjBhMWVlNzcwOGQ0YzM5OGZmOWE0OTM3YjI0MjFhNmQzYTQ4MjRiNmE2ZjFhNmJlOGJhY2I3ZWYyNzlkYSIsInRzIjoxNzEwMjY4ODAwLCJub25jZSI6Ims3SHk5bU5wUXJTdFV2V3hZejAxQWEiLCJzZXNzaW9uSWQiOiJzZXNzX2FiYzEyM3h5eiJ9.signature",
+      "meta": {
+        "did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+        "kid": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+        "ts": 1710268800,
+        "nonce": "k7Hy9mNpQrStUvWxYz01Aa",
+        "audience": "did:web:example.com",
+        "sessionId": "sess_abc123xyz",
+        "requestHash": "sha256:72b80a4aa6ab9f53ae8fe727b67b9cb7f49997f36217989927125832c3265bfb1c",
+        "responseHash": "sha256:1b4f0a1ee7708d4c398ff9a4937b2421a6d3a4824b6a6f1a6be8bacb7ef279da"
+      }
+    }
+  ]
+}

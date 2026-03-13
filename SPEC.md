@@ -1,0 +1,892 @@
+# MCP-I Protocol Specification
+
+**Model Context Protocol Identity Extension**
+
+Version: 1.0.0-draft
+Status: Draft
+Editors: MCP-I Working Group
+Repository: https://github.com/modelcontextprotocol-identity/mcp-i-core
+
+---
+
+## Abstract
+
+MCP-I (Model Context Protocol Identity) is a protocol extension for the Model Context Protocol (MCP) that adds cryptographic identity, delegation chains, and non-repudiation proofs to AI agent interactions. MCP-I enables MCP servers to verify *who* is calling (agent DID), *on whose behalf* (user delegation via W3C Verifiable Credentials), and *what* was done (signed proof for audit trails). The protocol uses Decentralized Identifiers (DIDs) for agent identity, W3C Verifiable Credentials for delegation, Ed25519 signatures for cryptographic operations, and StatusList2021 for revocation.
+
+---
+
+## Conformance Keywords
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119].
+
+---
+
+## Status
+
+**Draft** — Submitted to DIF TAAWG (Decentralized Identity Foundation, Trust and Authorization for AI Agents Working Group) for review. Not yet a standard.
+
+---
+
+## 1. Motivation
+
+The Model Context Protocol (MCP) defines a standard interface for AI agents to interact with tools and resources. However, MCP lacks an identity layer, creating several security vulnerabilities:
+
+1. **Agent Impersonation**: Without identity verification, any process can claim to be a particular agent. Malicious actors can impersonate trusted agents to gain unauthorized access to sensitive tools.
+
+2. **Prompt Injection with Forged Identity**: Attackers can inject prompts that include fabricated identity claims. Without cryptographic verification, servers cannot distinguish legitimate identity assertions from forged ones.
+
+3. **No Delegation Chain**: When Agent A delegates to Agent B, there is no standard mechanism to prove the delegation occurred or verify the delegation constraints. This prevents secure hierarchical agent architectures.
+
+4. **No Audit Trail**: Tool calls leave no cryptographic evidence of what was requested, what was returned, or who was responsible. This makes compliance, debugging, and incident response difficult.
+
+5. **Replay Attacks**: Without nonce-based session establishment, captured tool call payloads can be replayed by attackers.
+
+DIDs and Verifiable Credentials are the right fit for this problem:
+
+- **DIDs** provide decentralized, cryptographically-verifiable identifiers that agents control. They do not require a central authority and support multiple resolution methods (did:key for ephemeral, did:web for persistent organizational identity).
+
+- **Verifiable Credentials** provide a W3C standard for expressing cryptographically-signed claims. Delegation credentials can express scope constraints, temporal bounds, budget limits, and revocation status in an interoperable format.
+
+- **EdDSA/Ed25519** provides high-performance, deterministic signatures suitable for high-throughput agent interactions with no reliance on hash function collision resistance.
+
+---
+
+## 2. Terminology
+
+| Term | Definition |
+|------|------------|
+| **Agent DID** | A Decentralized Identifier (DID) that uniquely identifies an AI agent. MCP-I supports `did:key` (self-certifying, ephemeral) and `did:web` (organization-hosted, persistent). |
+| **Delegation Chain** | An ordered sequence of Delegation Credentials from a root delegator to the current agent, where each credential's subject is the next credential's issuer. |
+| **Delegation Credential** | A W3C Verifiable Credential that grants specific permissions from an issuer (delegator) to a subject (delegate). Contains CRISP constraints defining allowed operations. |
+| **Detached Proof** | A JWS (JSON Web Signature) that cryptographically binds a tool request and response together, enabling non-repudiation and audit. Attached to responses in the `_meta` field. |
+| **CRISP Constraints** | **C**onstraints, **R**esources, **I**dentity, **S**cope, **P**olicy — a structured envelope defining what operations a delegation permits: allowed scopes, budget caps, temporal bounds, and audience restrictions. |
+| **Session** | A validated, time-bounded context established via handshake. Sessions prevent replay attacks and provide a stable context for proof generation. |
+| **Handshake Nonce** | A cryptographically random value provided by the client during session establishment. Used once; prevents replay attacks. |
+| **Audience** | The intended recipient of a credential or proof, typically the MCP server's DID or domain. Prevents credential/proof misuse across different servers. |
+
+---
+
+## 3. Protocol Overview
+
+The following diagram illustrates the MCP-I protocol flow:
+
+```
+┌─────────────────┐                              ┌─────────────────┐
+│  Client Agent   │                              │   MCP Server    │
+│  (did:key:z...) │                              │ (did:web:srv)   │
+└────────┬────────┘                              └────────┬────────┘
+         │                                                │
+         │  ┌──────────────────────────────────────────┐  │
+         │  │ 1. HANDSHAKE REQUEST                     │  │
+         │  │    - nonce: <22-char base64url>          │  │
+         │  │    - audience: "did:web:srv"             │  │
+         │  │    - timestamp: <unix epoch seconds>     │  │
+         │  │    - agentDid: "did:key:z6Mk..."         │  │
+         ├──┴──────────────────────────────────────────┴──►
+         │                                                │
+         │         ┌─ Validate:                           │
+         │         │  • timestamp within ±120s            │
+         │         │  • nonce not seen before             │
+         │         │  • audience matches server DID       │
+         │         └──────────────────────────────────────┤
+         │                                                │
+         │  ┌──────────────────────────────────────────┐  │
+         │  │ 2. HANDSHAKE RESPONSE                    │  │
+         │  │    - sessionId: "mcpi_<uuid>"            │  │
+         │  │    - serverDid: "did:web:srv"            │  │
+         │  │    - ttlMinutes: 30                      │  │
+         ◄──┴──────────────────────────────────────────┴──┤
+         │                                                │
+         │  ┌──────────────────────────────────────────┐  │
+         │  │ 3. TOOL CALL REQUEST                     │  │
+         │  │    method: "tools/call"                  │  │
+         │  │    params:                               │  │
+         │  │      name: "read_file"                   │  │
+         │  │      arguments: { path: "/etc/hosts" }   │  │
+         │  │      sessionId: "mcpi_..."               │  │
+         │  │      delegation: <DelegationCredential>  │◄── Optional
+         ├──┴──────────────────────────────────────────┴──►
+         │                                                │
+         │         ┌─ Process:                            │
+         │         │  • Validate session                  │
+         │         │  • Verify delegation (if present)    │
+         │         │  • Execute tool                      │
+         │         │  • Generate detached proof           │
+         │         └──────────────────────────────────────┤
+         │                                                │
+         │  ┌──────────────────────────────────────────┐  │
+         │  │ 4. TOOL CALL RESPONSE                    │  │
+         │  │    content: [ { type: "text", ... } ]    │  │
+         │  │    _meta:                                │  │
+         │  │      proof:                              │  │
+         │  │        jws: "eyJhbGciOiJFZERTQSI..."     │  │
+         │  │        meta:                             │  │
+         │  │          did: "did:web:srv"              │  │
+         │  │          kid: "did:web:srv#key-1"        │  │
+         │  │          ts: 1710288000                  │  │
+         │  │          nonce: "..."                    │  │
+         │  │          requestHash: "sha256:..."       │  │
+         │  │          responseHash: "sha256:..."      │  │
+         ◄──┴──────────────────────────────────────────┴──┤
+         │                                                │
+         ▼                                                ▼
+```
+
+---
+
+## 4. Agent Identity
+
+### 4.1 Supported DID Methods
+
+MCP-I implementations MUST support:
+
+| Method | Use Case | Resolution |
+|--------|----------|------------|
+| `did:key` | Ephemeral agents, development, testing | Local derivation from public key bytes |
+| `did:web` | Production servers, organizational identity | HTTPS fetch of `/.well-known/did.json` or path-based document |
+
+Implementations MAY support additional DID methods.
+
+### 4.2 Key Material
+
+MCP-I uses Ed25519 (EdDSA over Curve25519) for all cryptographic operations:
+
+- **Key Size**: 32-byte private seed, 32-byte public key
+- **Signature Size**: 64 bytes
+- **Algorithm Identifier**: `EdDSA` (in JWS headers)
+- **JWK Key Type**: `OKP` (Octet Key Pair)
+- **JWK Curve**: `Ed25519`
+
+### 4.3 did:key Derivation
+
+A `did:key` DID is derived from an Ed25519 public key as follows:
+
+1. Prepend the Ed25519 multicodec prefix `0xed01` to the 32-byte public key
+2. Encode the result using base58btc
+3. Prepend the multibase prefix `z`
+4. Construct the DID: `did:key:z<base58btc-encoded-bytes>`
+
+Example:
+```
+Public Key (hex): 8076ee2cfc1a...32 bytes...
+Multicodec:       ed01 + 8076ee2cfc1a...
+Base58btc:        6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK
+DID:              did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK
+```
+
+The verification method ID is `<did>#keys-1`.
+
+### 4.4 did:web Resolution
+
+A `did:web` DID resolves to a DID Document via HTTPS:
+
+| DID | Resolution URL |
+|-----|---------------|
+| `did:web:example.com` | `https://example.com/.well-known/did.json` |
+| `did:web:example.com:agents:bot1` | `https://example.com/agents/bot1/did.json` |
+
+The DID Document MUST contain at least one verification method with `publicKeyJwk` in Ed25519 format:
+
+```json
+{
+  "id": "did:web:example.com",
+  "verificationMethod": [{
+    "id": "did:web:example.com#key-1",
+    "type": "Ed25519VerificationKey2020",
+    "controller": "did:web:example.com",
+    "publicKeyJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "<base64url-encoded-32-byte-public-key>"
+    }
+  }],
+  "authentication": ["did:web:example.com#key-1"],
+  "assertionMethod": ["did:web:example.com#key-1"]
+}
+```
+
+---
+
+## 5. Session Lifecycle
+
+### 5.1 Handshake Request
+
+To establish a session, the client sends a handshake request:
+
+```typescript
+interface HandshakeRequest {
+  nonce: string;      // 16 bytes, base64url-encoded (22 chars, no padding)
+  audience: string;   // Server DID or domain
+  timestamp: number;  // Unix epoch seconds
+  agentDid?: string;  // Client's DID (optional for anonymous sessions)
+  clientInfo?: {      // Optional client metadata
+    name: string;
+    version?: string;
+    platform?: string;
+  };
+}
+```
+
+### 5.2 Validation Rules
+
+The server MUST validate the handshake request:
+
+1. **Timestamp Skew**: `|server_time - request.timestamp| <= 120 seconds`
+   - Reject if outside this window
+   - Remediation: "Check NTP sync on client and server"
+
+2. **Nonce Uniqueness**: The (nonce, agentDid) pair MUST NOT have been seen before
+   - Reject with "Nonce already used (replay attack prevention)"
+   - Nonces MUST be cached for at least `sessionTtlMinutes + 1 minute`
+
+3. **Audience Match**: `request.audience` MUST match the server's DID or expected domain
+   - Prevents credential forwarding attacks
+
+### 5.3 Session Creation
+
+On successful validation, the server creates a session:
+
+```typescript
+interface SessionContext {
+  sessionId: string;         // Format: "mcpi_<uuid-v4>"
+  audience: string;          // Echoed from request
+  nonce: string;             // Echoed from request
+  timestamp: number;         // Request timestamp
+  createdAt: number;         // Server timestamp at creation
+  lastActivity: number;      // Updated on each request
+  ttlMinutes: number;        // Default: 30
+  agentDid?: string;         // Client DID if provided
+  serverDid?: string;        // Server's DID
+  identityState: 'anonymous' | 'authenticated';
+}
+```
+
+### 5.4 Session TTL and Expiry
+
+- **Idle Timeout**: Sessions expire after `ttlMinutes` of inactivity
+- **Absolute Lifetime**: Implementations MAY enforce a maximum session lifetime
+- **Activity Update**: `lastActivity` is updated on each valid request
+
+### 5.5 Replay Prevention
+
+The nonce cache implementation MUST:
+- Store (nonce, agentDid, expiry) tuples
+- Support TTL-based automatic expiry
+- Be atomic to prevent race conditions in concurrent environments
+- For distributed deployments: use Redis, DynamoDB, or Cloudflare KV (not in-memory)
+
+---
+
+## 6. Delegation
+
+### 6.1 DelegationRecord Structure
+
+Internal representation of a delegation:
+
+```typescript
+interface DelegationRecord {
+  id: string;                    // Unique delegation identifier
+  issuerDid: string;             // DID of the delegator
+  subjectDid: string;            // DID of the delegate
+  controller?: string;           // DID that can revoke this delegation
+  vcId: string;                  // URN of the Verifiable Credential
+  parentId?: string;             // Parent delegation ID (for chains)
+  constraints: DelegationConstraints;
+  signature: string;             // Extracted from VC proof
+  status: 'active' | 'revoked' | 'expired';
+  createdAt?: number;
+  revokedAt?: number;
+  revokedReason?: string;
+  metadata?: Record<string, unknown>;
+}
+```
+
+### 6.2 DelegationCredential as W3C VC
+
+Delegations are issued as W3C Verifiable Credentials:
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1",
+    "https://schema.modelcontextprotocol-identity.io/xmcp-i/credentials/delegation.v1.0.0.json"
+  ],
+  "id": "urn:uuid:d7f8a9b0-1234-5678-9abc-def012345678",
+  "type": ["VerifiableCredential", "DelegationCredential"],
+  "issuer": "did:key:z6MkIssuer...",
+  "issuanceDate": "2024-03-01T12:00:00Z",
+  "expirationDate": "2024-03-02T12:00:00Z",
+  "credentialSubject": {
+    "id": "did:key:z6MkDelegate...",
+    "delegation": {
+      "id": "del-001",
+      "issuerDid": "did:key:z6MkIssuer...",
+      "subjectDid": "did:key:z6MkDelegate...",
+      "constraints": {
+        "scopes": ["tool:read_file", "tool:list_directory"],
+        "notBefore": 1709294400,
+        "notAfter": 1709380800,
+        "audience": "did:web:mcp-server.example.com"
+      },
+      "status": "active"
+    }
+  },
+  "credentialStatus": {
+    "id": "https://example.com/status/1#42",
+    "type": "StatusList2021Entry",
+    "statusPurpose": "revocation",
+    "statusListIndex": "42",
+    "statusListCredential": "https://example.com/status/1"
+  },
+  "proof": {
+    "type": "Ed25519Signature2020",
+    "created": "2024-03-01T12:00:00Z",
+    "verificationMethod": "did:key:z6MkIssuer...#keys-1",
+    "proofPurpose": "assertionMethod",
+    "proofValue": "<base64url-encoded-signature>"
+  }
+}
+```
+
+### 6.3 CRISP Constraint Envelope
+
+```typescript
+interface DelegationConstraints {
+  // Temporal bounds (Unix epoch seconds)
+  notBefore?: number;
+  notAfter?: number;
+
+  // Simple scope list (tool names, resource patterns)
+  scopes?: string[];
+
+  // Audience restriction (server DID or domain)
+  audience?: string | string[];
+
+  // Extended CRISP constraints
+  crisp?: {
+    budget?: {
+      unit: 'USD' | 'ops' | 'points';
+      cap: number;
+      window?: {
+        kind: 'rolling' | 'fixed';
+        durationSec: number;
+      };
+    };
+    scopes: Array<{
+      resource: string;
+      matcher: 'exact' | 'prefix' | 'regex';
+      constraints?: Record<string, unknown>;
+    }>;
+  };
+}
+```
+
+### 6.4 Delegation Graph
+
+Delegations form a directed acyclic graph (DAG):
+
+```
+     [Root: User → Agent A]
+            │
+     ┌──────┴──────┐
+     ▼             ▼
+[A → B]        [A → C]
+     │
+     ▼
+[B → D]
+```
+
+- Each node is a `DelegationCredential`
+- `parentId` links to the parent delegation
+- Child delegation's `issuerDid` MUST equal parent's `subjectDid`
+- Scope constraints MUST be equal to or narrower than parent's constraints
+
+### 6.5 Cascading Revocation
+
+When a delegation is revoked:
+
+1. Mark the delegation as `revoked` in the delegation graph
+2. Recursively mark all descendant delegations as `revoked`
+3. Update StatusList2021 credential for each revoked delegation
+4. Emit revocation events for audit logging
+
+### 6.6 StatusList2021 Revocation
+
+MCP-I uses the W3C StatusList2021 specification for revocation:
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1",
+    "https://w3id.org/vc/status-list/2021/v1"
+  ],
+  "id": "https://example.com/status/1",
+  "type": ["VerifiableCredential", "StatusList2021Credential"],
+  "issuer": "did:web:example.com",
+  "issuanceDate": "2024-03-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "https://example.com/status/1#list",
+    "type": "StatusList2021",
+    "statusPurpose": "revocation",
+    "encodedList": "<gzip-compressed-base64-bitstring>"
+  }
+}
+```
+
+- Each delegation is assigned a `statusListIndex` (0 to 131071)
+- Bit at index is 0 = valid, 1 = revoked
+- Bitstring is gzip-compressed and base64-encoded
+
+---
+
+## 7. Proof Generation
+
+### 7.1 Purpose
+
+Detached proofs provide:
+
+- **Non-repudiation**: Cryptographic evidence that the server processed the request
+- **Integrity**: Hashes bind the exact request and response together
+- **Audit Trail**: Proofs can be stored and verified offline
+
+### 7.2 ProofMeta Fields
+
+```typescript
+interface ProofMeta {
+  did: string;          // Server's DID (signer)
+  kid: string;          // Key ID used for signing
+  ts: number;           // Unix epoch seconds when proof was generated
+  nonce: string;        // Session nonce (prevents cross-session replay)
+  audience: string;     // Session audience
+  sessionId: string;    // Session identifier
+  requestHash: string;  // SHA-256 of canonicalized request
+  responseHash: string; // SHA-256 of canonicalized response
+  scopeId?: string;     // Scope under which the call was made
+  delegationRef?: string; // Reference to delegation credential
+  clientDid?: string;   // Client's DID if authenticated
+}
+```
+
+### 7.3 Hash Generation
+
+1. **Canonicalize**: Convert request/response to RFC 8785 (JCS) canonical JSON
+2. **Hash**: Compute SHA-256 of the canonical JSON bytes (UTF-8 encoded)
+3. **Format**: `sha256:<64-char-lowercase-hex>`
+
+Request canonicalization includes:
+```json
+{
+  "method": "tools/call",
+  "params": { /* sorted keys, no whitespace */ }
+}
+```
+
+Response canonicalization is the `data` field only (excludes `_meta`).
+
+### 7.4 JWS Compact Serialization
+
+The proof JWS is generated as:
+
+```
+BASE64URL(header) . BASE64URL(payload) . BASE64URL(signature)
+```
+
+**Header**:
+```json
+{
+  "alg": "EdDSA",
+  "kid": "did:web:server.example.com#key-1"
+}
+```
+
+**Payload** (canonicalized):
+```json
+{
+  "aud": "did:web:server.example.com",
+  "iss": "did:web:server.example.com",
+  "nonce": "...",
+  "requestHash": "sha256:...",
+  "responseHash": "sha256:...",
+  "sessionId": "mcpi_...",
+  "sub": "did:web:server.example.com",
+  "ts": 1710288000
+}
+```
+
+### 7.5 _meta Attachment
+
+The proof is attached to tool responses in the `_meta` field:
+
+```json
+{
+  "content": [{ "type": "text", "text": "File contents..." }],
+  "_meta": {
+    "proof": {
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6Ii4uLiJ9.eyJhdWQiOi4uLn0.c2ln...",
+      "meta": {
+        "did": "did:web:server.example.com",
+        "kid": "did:web:server.example.com#key-1",
+        "ts": 1710288000,
+        "nonce": "abc123...",
+        "audience": "did:web:server.example.com",
+        "sessionId": "mcpi_d7f8a9b0-...",
+        "requestHash": "sha256:a1b2c3...",
+        "responseHash": "sha256:d4e5f6..."
+      }
+    }
+  }
+}
+```
+
+---
+
+## 8. Outbound Delegation Propagation
+
+When an MCP server calls downstream services (APIs, other MCP servers), it MUST forward delegation context.
+
+### 8.1 HTTP Headers
+
+| Header | Value |
+|--------|-------|
+| `X-Agent-DID` | Original agent's DID |
+| `X-Delegation-Chain` | Comma-separated list of delegation IDs from root to current |
+| `X-Session-ID` | MCP-I session ID |
+| `X-Delegation-Proof` | Signed JWT proving delegation authority |
+| `X-Scopes` | Comma-separated list of granted scopes |
+
+### 8.2 Delegation Proof JWT
+
+```typescript
+interface DelegationProofJWT {
+  // Standard JWT claims
+  iss: string;   // Server DID (JWT issuer)
+  sub: string;   // User DID (on whose behalf)
+  aud: string;   // Target service hostname
+  iat: number;   // Issued at (Unix epoch)
+  exp: number;   // Expires at (iat + 60 seconds)
+  jti: string;   // Unique JWT ID (UUID)
+
+  // MCP-I claims
+  delegation_id: string;    // Current delegation ID
+  delegation_chain: string; // Chain path (vcId>delegationId)
+  scope: string;            // Comma-separated scopes
+}
+```
+
+The JWT is signed with EdDSA using the server's private key.
+
+### 8.3 Chain String Format
+
+```
+<vcId>><delegationId>
+```
+
+Example: `urn:uuid:d7f8a9b0-1234-5678-9abc-def012345678>del-001`
+
+---
+
+## 9. Authorization Flow
+
+### 9.1 verifyOrHints Pattern
+
+When a tool call requires authorization:
+
+1. Server checks for valid delegation in the request
+2. If delegation is valid and covers required scopes: proceed
+3. If delegation is missing or insufficient: return `needs_authorization` error
+
+### 9.2 needs_authorization Error Structure
+
+```typescript
+interface NeedsAuthorizationError {
+  error: 'needs_authorization';
+  message: string;
+  authorizationUrl: string;  // URL where user can grant authorization
+  resumeToken: string;       // Token to resume flow after authorization
+  expiresAt: number;         // Unix epoch when resumeToken expires
+  scopes: string[];          // Scopes being requested
+  display?: {
+    title?: string;
+    hint?: Array<'link' | 'qr' | 'code'>;
+    authorizationCode?: string;
+    qrUrl?: string;
+  };
+}
+```
+
+### 9.3 Resume Flow
+
+1. Client receives `needs_authorization` error
+2. Client directs user to `authorizationUrl`
+3. User authenticates and grants authorization
+4. Authorization service issues DelegationCredential
+5. Client retries request with `resumeToken` and new delegation
+6. Server validates delegation and processes request
+
+---
+
+## 10. Well-Known Endpoint
+
+MCP-I servers SHOULD expose `/.well-known/mcpi`:
+
+```json
+{
+  "did": "did:web:mcp-server.example.com",
+  "version": "1.0.0",
+  "capabilities": {
+    "delegation": true,
+    "proof": true,
+    "revocation": true
+  },
+  "supported_did_methods": ["did:key", "did:web"],
+  "proof_algorithms": ["EdDSA"],
+  "endpoints": {
+    "handshake": "/_mcpi/handshake",
+    "status_list": "/.well-known/status/1"
+  }
+}
+```
+
+---
+
+## 11. Security Considerations
+
+### 11.1 Nonce Replay Attacks
+
+- Nonces MUST be cryptographically random (16 bytes minimum entropy)
+- Nonce cache MUST persist across server restarts (use external storage)
+- Nonce cache TTL MUST exceed session TTL
+- Distributed deployments MUST use atomic check-and-set operations
+
+### 11.2 Timestamp Skew Attacks
+
+- Default skew tolerance is 120 seconds
+- Servers MAY reduce this for high-security deployments
+- Servers SHOULD use NTP for time synchronization
+- Timestamps in proofs allow detection of delayed replay attempts
+
+### 11.3 Delegation Scope Escalation
+
+- Child delegations MUST NOT exceed parent scope
+- Servers MUST validate entire delegation chain, not just leaf
+- Scope comparison MUST be performed at each chain link
+- Use CRISP `matcher: 'exact'` for sensitive resources
+
+### 11.4 Key Rotation
+
+- did:key: Generate new DID (no rotation mechanism)
+- did:web: Update `did.json` with new verification method
+- Old keys SHOULD remain in `did.json` for proof verification
+- Delegation credentials reference specific key IDs; reissue after rotation
+
+### 11.5 Revocation Freshness
+
+- StatusList2021 credentials have cache-control considerations
+- Servers SHOULD set appropriate `Cache-Control` headers
+- High-security deployments MAY require real-time revocation checks
+- Cascading revocation MUST be atomic
+
+---
+
+## 12. Privacy Considerations
+
+### 12.1 DID Correlation
+
+A persistent `did:key` or `did:web` identifier acts as a pseudonym. Using the same DID across multiple MCP servers enables cross-server activity correlation. Implementations SHOULD consider per-server DID rotation for privacy-sensitive deployments.
+
+### 12.2 Session Linkability
+
+Session IDs (`mcpi_*`) appear in detached proofs. Within a session, all tool calls are linkable. Implementations SHOULD use short session TTLs and avoid logging session IDs alongside PII.
+
+### 12.3 Delegation Chain Disclosure
+
+Outbound `X-Agent-DID` and `X-Delegation-Chain` headers reveal the agent's identity and delegation provenance to downstream services. Implementations SHOULD only propagate delegation headers to trusted downstream services.
+
+### 12.4 Proof Retention and Right to Erasure
+
+Detached proofs are audit records containing DIDs and session identifiers. Operators retaining proof logs SHOULD consider applicable data protection regulations (GDPR Art. 17, CCPA) and implement appropriate retention policies.
+
+---
+
+## 13. Protocol Versioning
+
+The current protocol version is `1.0.0`.
+
+Handshake requests SHOULD include `clientProtocolVersion: "1.0.0"`.
+Handshake responses MUST include `protocolVersion: "1.0.0"`.
+
+Servers MUST reject clients with an incompatible major version (e.g., a `2.x` server MUST reject a `1.x` client).
+Minor version differences SHOULD be handled gracefully — servers SHOULD implement backward compatibility within a major version.
+
+---
+
+## 14. Transport Binding
+
+MCP-I is transport-agnostic. The handshake and proofs use standard MCP mechanisms:
+
+**Handshake**: Implemented as an MCP tool named `_mcpi_handshake`. This is compatible with all MCP transports (stdio, SSE, HTTP Streamable) without modification.
+
+**Proof attachment**: Detached proofs are attached to tool responses in the standard MCP `_meta` field, which is transported transparently by all MCP transport implementations.
+
+**Outbound delegation headers**: When an MCP server makes outbound HTTP calls (not MCP calls), delegation context is propagated via HTTP headers as defined in §8. For MCP-to-MCP calls, delegation context SHOULD be passed via the `_mcpi_handshake` flow.
+
+---
+
+## 15. Conformance
+
+Implementation conformance requirements are defined in `CONFORMANCE.md`. Three compliance levels are specified:
+
+- **Level 1 — Core Crypto**: Basic key generation, signing, verification, and well-known endpoint
+- **Level 2 — Full Session**: Session handshake, nonce replay prevention, proof generation
+- **Level 3 — Full Delegation**: VC issuance/verification, delegation graphs, revocation, outbound propagation
+
+See `CONFORMANCE.md` for detailed requirements and test references.
+
+---
+
+## 16. References
+
+### Normative References
+
+- **[RFC 2119]** IETF. *Key words for use in RFCs to Indicate Requirement Levels*. https://datatracker.ietf.org/doc/html/rfc2119
+- **[DID-CORE]** W3C. *Decentralized Identifiers (DIDs) v1.0*. https://www.w3.org/TR/did-core/
+- **[VC-DATA-MODEL]** W3C. *Verifiable Credentials Data Model v1.1*. https://www.w3.org/TR/vc-data-model/
+- **[DID-KEY]** W3C CCG. *did:key Method Specification*. https://w3c-ccg.github.io/did-method-key/
+- **[DID-WEB]** W3C CCG. *did:web Method Specification*. https://w3c-ccg.github.io/did-method-web/
+- **[STATUS-LIST-2021]** W3C CCG. *Status List 2021*. https://w3c-ccg.github.io/vc-status-list-2021/
+- **[RFC8037]** IETF. *CFRG Elliptic Curve Diffie-Hellman (ECDH) and Signatures in JOSE*. https://datatracker.ietf.org/doc/html/rfc8037
+- **[RFC7517]** IETF. *JSON Web Key (JWK)*. https://datatracker.ietf.org/doc/html/rfc7517
+- **[RFC7515]** IETF. *JSON Web Signature (JWS)*. https://datatracker.ietf.org/doc/html/rfc7515
+- **[RFC8785]** IETF. *JSON Canonicalization Scheme (JCS)*. https://datatracker.ietf.org/doc/html/rfc8785
+
+### Informative References
+
+- **[MCP]** Anthropic. *Model Context Protocol Specification*. https://spec.modelcontextprotocol.io/
+- **[MULTICODEC]** Multiformats. *Multicodec Table*. https://github.com/multiformats/multicodec
+- **[MULTIBASE]** Multiformats. *Multibase Specification*. https://github.com/multiformats/multibase
+
+---
+
+## Appendix A: Error Codes
+
+| Code | Description |
+|------|-------------|
+| `XMCP_I_EHANDSHAKE` | Handshake validation failed (timestamp, nonce, or audience) |
+| `XMCP_I_ESESSION` | Session not found or expired |
+| `XMCP_I_EDELEGATION` | Delegation verification failed |
+| `XMCP_I_ESCOPE` | Requested operation outside delegated scope |
+| `XMCP_I_EREVOKED` | Delegation has been revoked |
+| `XMCP_I_EPROOF` | Proof verification failed |
+| `XMCP_I_EDID` | DID resolution failed |
+
+---
+
+## Appendix B: Base58btc Alphabet
+
+```
+123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+```
+
+Note: Excludes `0`, `O`, `I`, `l` to avoid visual ambiguity.
+
+---
+
+## Appendix C: Test Vectors
+
+These test vectors enable interoperability testing across implementations.
+
+### C.1 SHA-256 Canonical Hash
+
+**Input JSON:**
+```json
+{"method":"tools/call","params":{"name":"echo","arguments":{}}}
+```
+
+**JCS Canonicalized (RFC 8785):**
+```json
+{"method":"tools/call","params":{"arguments":{},"name":"echo"}}
+```
+
+**SHA-256 (hex):**
+```
+5057521f310b536837b619f0ac040ef8064f8c597da8ec22a56801b435744033
+```
+
+**MCP-I Format:**
+```
+sha256:5057521f310b536837b619f0ac040ef8064f8c597da8ec22a56801b435744033
+```
+
+### C.2 did:key Derivation
+
+**Ed25519 Public Key (32 bytes, hex):**
+```
+8076ee2cfc1acdd3f8f4e38c665a0a3e6ad6e06dc05b4f6ec9c5b1ae7c81c9a2
+```
+
+**Steps:**
+1. Prepend multicodec prefix `0xed01` (Ed25519 public key)
+2. Encode with base58btc
+3. Prepend multibase prefix `z`
+
+**Multicodec + Key (hex):**
+```
+ed018076ee2cfc1acdd3f8f4e38c665a0a3e6ad6e06dc05b4f6ec9c5b1ae7c81c9a2
+```
+
+**Base58btc Encoded:**
+```
+6Mko6jQvza2BSKRcrbJwgwbL9KYDn1isCUV5Lnq7gSTTKJq
+```
+
+**did:key:**
+```
+did:key:z6Mko6jQvza2BSKRcrbJwgwbL9KYDn1isCUV5Lnq7gSTTKJq
+```
+
+**Verification Method ID:**
+```
+did:key:z6Mko6jQvza2BSKRcrbJwgwbL9KYDn1isCUV5Lnq7gSTTKJq#keys-1
+```
+
+### C.3 JWS Structure
+
+A valid detached proof JWS has the following structure:
+
+**Protected Header (decoded):**
+```json
+{
+  "alg": "EdDSA",
+  "kid": "did:key:z6Mk...#keys-1"
+}
+```
+
+**Payload (decoded, canonicalized):**
+```json
+{
+  "aud": "did:web:server.example.com",
+  "iss": "did:web:server.example.com",
+  "nonce": "abc123...",
+  "requestHash": "sha256:5057521f...",
+  "responseHash": "sha256:d4e5f6...",
+  "sessionId": "mcpi_d7f8a9b0-...",
+  "sub": "did:web:server.example.com",
+  "ts": 1710288000
+}
+```
+
+**Signature:**
+```
+Ed25519Sign(privateKey, BASE64URL(header) || "." || BASE64URL(canonicalize(payload)))
+```
+
+**Compact JWS:**
+```
+<base64url-header>.<base64url-payload>.<base64url-signature>
+```
+
+Note: Actual signature values are key-dependent. Implementers should verify the structure and use the test key material from the reference implementation's test suite for bit-exact validation.
+
+---
+
+*End of Specification*
