@@ -1,0 +1,332 @@
+/**
+ * Session Management — Platform-agnostic Protocol Reference
+ *
+ * Handles handshake enforcement, session management, and nonce validation
+ * according to MCP-I requirements 4.5–4.9 and 19.1–19.2.
+ *
+ * Platform adapters inject a CryptoProvider for all random byte generation.
+ * The static generateNonce() uses globalThis.crypto (available Node 20+ and
+ * Cloudflare Workers) to remain synchronous without platform-specific imports.
+ */
+
+import type {
+  HandshakeRequest,
+  SessionContext,
+  NonceCache,
+} from '../types/protocol.js';
+import type { CryptoProvider } from '../providers/base.js';
+import { MemoryNonceCacheProvider } from '../providers/memory.js';
+import { logger } from '../logging/index.js';
+
+export interface SessionConfig {
+  timestampSkewSeconds?: number;
+  sessionTtlMinutes?: number;
+  absoluteSessionLifetime?: number;
+  nonceCache?: NonceCache;
+  serverDid?: string;
+}
+
+export interface HandshakeResult {
+  success: boolean;
+  session?: SessionContext;
+  error?: {
+    code: string;
+    message: string;
+    remediation?: string;
+  };
+}
+
+export class SessionManager {
+  private config: Required<Omit<SessionConfig, 'absoluteSessionLifetime' | 'serverDid'>> & {
+    absoluteSessionLifetime?: number;
+    serverDid?: string;
+  };
+  private cryptoProvider: CryptoProvider;
+  private sessions = new Map<string, SessionContext>();
+
+  constructor(cryptoProvider: CryptoProvider, config: SessionConfig = {}) {
+    this.cryptoProvider = cryptoProvider;
+    this.config = {
+      timestampSkewSeconds: config.timestampSkewSeconds ?? 120,
+      sessionTtlMinutes: config.sessionTtlMinutes ?? 30,
+      nonceCache: config.nonceCache ?? new MemoryNonceCacheProvider(),
+      ...(config.absoluteSessionLifetime !== undefined && {
+        absoluteSessionLifetime: config.absoluteSessionLifetime,
+      }),
+      ...(config.serverDid !== undefined && { serverDid: config.serverDid }),
+    };
+
+    if (this.config.nonceCache instanceof MemoryNonceCacheProvider) {
+      logger.warn(
+        '[SessionManager] Using MemoryNonceCacheProvider — not suitable for ' +
+          'multi-instance deployments. Use Redis, DynamoDB, or Cloudflare KV ' +
+          'for production.'
+      );
+    }
+  }
+
+  setServerDid(serverDid: string): void {
+    this.config.serverDid = serverDid;
+  }
+
+  /**
+   * Validate an MCP-I handshake request and create a session.
+   *
+   * Performs the following checks:
+   * - Timestamp within acceptable skew window
+   * - Audience matches server DID (if configured)
+   * - Nonce not previously used (replay protection)
+   *
+   * @param request - The handshake request containing nonce, audience, timestamp, and optional agentDid
+   * @returns Result object with success flag, session on success, or error details on failure
+   */
+  async validateHandshake(request: HandshakeRequest): Promise<HandshakeResult> {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const timeDiff = Math.abs(now - request.timestamp);
+
+      if (timeDiff > this.config.timestampSkewSeconds) {
+        return {
+          success: false,
+          error: {
+            code: 'XMCP_I_EHANDSHAKE',
+            message: `Timestamp outside acceptable range (±${this.config.timestampSkewSeconds}s)`,
+            remediation: `Check NTP sync on client and server. Current server time: ${now}, received: ${request.timestamp}, diff: ${timeDiff}s. Adjust timestampSkewSeconds if needed.`,
+          },
+        };
+      }
+
+      // Validate audience matches this server's DID (SPEC.md §4 MUST)
+      if (this.config.serverDid && request.audience !== this.config.serverDid) {
+        return {
+          success: false,
+          error: {
+            code: 'MCPI_AUDIENCE_MISMATCH',
+            message: `Audience mismatch: expected ${this.config.serverDid}, got ${request.audience}`,
+          },
+        };
+      }
+
+      const nonceExists = await this.config.nonceCache.has(
+        request.nonce,
+        request.agentDid
+      );
+      if (nonceExists) {
+        return {
+          success: false,
+          error: {
+            code: 'XMCP_I_EHANDSHAKE',
+            message: 'Nonce already used (replay attack prevention)',
+            remediation: 'Generate a new unique nonce for each request',
+          },
+        };
+      }
+
+      const nonceTtlSeconds = this.config.sessionTtlMinutes * 60 + 60;
+      await this.config.nonceCache.add(
+        request.nonce,
+        nonceTtlSeconds,
+        request.agentDid
+      );
+
+      const sessionId = await this.generateSessionId();
+      const clientInfo = await this.buildClientInfo(request);
+
+      const session: SessionContext = {
+        sessionId,
+        audience: request.audience,
+        nonce: request.nonce,
+        timestamp: request.timestamp,
+        createdAt: now,
+        lastActivity: now,
+        ttlMinutes: this.config.sessionTtlMinutes,
+        identityState: 'anonymous',
+        agentDid: request.agentDid,
+        ...(this.config.serverDid && { serverDid: this.config.serverDid }),
+        ...(clientInfo && { clientInfo }),
+      };
+
+      this.sessions.set(sessionId, session);
+
+      return { success: true, session };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'XMCP_I_EHANDSHAKE',
+          message: `Handshake validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        },
+      };
+    }
+  }
+
+  /**
+   * Retrieve a session by ID, checking for expiration.
+   *
+   * Updates lastActivity timestamp on successful retrieval (sliding window expiry).
+   * Returns null if session doesn't exist, has exceeded idle TTL, or has exceeded
+   * absolute lifetime (if configured).
+   *
+   * @param sessionId - The session ID (e.g., "mcpi_...")
+   * @returns Session context if valid, null if expired or not found
+   */
+  async getSession(sessionId: string): Promise<SessionContext | null> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    const idleTimeSeconds = now - session.lastActivity;
+    const maxIdleSeconds = session.ttlMinutes * 60;
+
+    if (idleTimeSeconds > maxIdleSeconds) {
+      this.sessions.delete(sessionId);
+      return null;
+    }
+
+    if (this.config.absoluteSessionLifetime !== undefined) {
+      const sessionAgeSeconds = now - session.createdAt;
+      const maxAgeSeconds = this.config.absoluteSessionLifetime * 60;
+      if (sessionAgeSeconds > maxAgeSeconds) {
+        this.sessions.delete(sessionId);
+        return null;
+      }
+    }
+
+    session.lastActivity = now;
+    this.sessions.set(sessionId, session);
+    return session;
+  }
+
+  private async generateSessionId(): Promise<string> {
+    const bytes = await this.cryptoProvider.randomBytes(16);
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+    return `mcpi_${uuid}`;
+  }
+
+  private async generateClientId(): Promise<string> {
+    const bytes = await this.cryptoProvider.randomBytes(6);
+    const hex = Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return `client_${hex}`;
+  }
+
+  private normalizeClientInfoString(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private async buildClientInfo(
+    request: HandshakeRequest
+  ): Promise<SessionContext['clientInfo'] | undefined> {
+    const hasMetadata =
+      !!request.clientInfo ||
+      typeof request.clientProtocolVersion === 'string' ||
+      request.clientCapabilities !== undefined;
+
+    if (!hasMetadata) return undefined;
+
+    const source = request.clientInfo;
+
+    return {
+      name: this.normalizeClientInfoString(source?.name) ?? 'unknown',
+      title: this.normalizeClientInfoString(source?.title),
+      version: this.normalizeClientInfoString(source?.version),
+      platform: this.normalizeClientInfoString(source?.platform),
+      vendor: this.normalizeClientInfoString(source?.vendor),
+      persistentId: this.normalizeClientInfoString(source?.persistentId),
+      clientId:
+        this.normalizeClientInfoString(source?.clientId) ??
+        (await this.generateClientId()),
+      protocolVersion: this.normalizeClientInfoString(request.clientProtocolVersion),
+      capabilities: request.clientCapabilities,
+    };
+  }
+
+  static generateNonce(): string {
+    const buffer = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(buffer);
+    let binaryStr = '';
+    for (let i = 0; i < buffer.length; i++) {
+      binaryStr += String.fromCharCode(buffer[i]!);
+    }
+    return btoa(binaryStr)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+  }
+
+  async cleanup(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+
+    for (const [sessionId, session] of this.sessions.entries()) {
+      const idleTimeSeconds = now - session.lastActivity;
+      const maxIdleSeconds = session.ttlMinutes * 60;
+      let expired = idleTimeSeconds > maxIdleSeconds;
+
+      if (!expired && this.config.absoluteSessionLifetime !== undefined) {
+        const sessionAgeSeconds = now - session.createdAt;
+        const maxAgeSeconds = this.config.absoluteSessionLifetime * 60;
+        expired = sessionAgeSeconds > maxAgeSeconds;
+      }
+
+      if (expired) {
+        this.sessions.delete(sessionId);
+      }
+    }
+
+    await this.config.nonceCache.cleanup();
+  }
+
+  getStats(): {
+    activeSessions: number;
+    config: {
+      timestampSkewSeconds: number;
+      sessionTtlMinutes: number;
+      absoluteSessionLifetime?: number;
+      cacheType: string;
+    };
+  } {
+    return {
+      activeSessions: this.sessions.size,
+      config: {
+        timestampSkewSeconds: this.config.timestampSkewSeconds,
+        sessionTtlMinutes: this.config.sessionTtlMinutes,
+        absoluteSessionLifetime: this.config.absoluteSessionLifetime,
+        cacheType: this.config.nonceCache.constructor.name,
+      },
+    };
+  }
+
+  clearSessions(): void {
+    this.sessions.clear();
+  }
+}
+
+export function createHandshakeRequest(audience: string): HandshakeRequest {
+  return {
+    nonce: SessionManager.generateNonce(),
+    audience,
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+}
+
+export function validateHandshakeFormat(request: unknown): request is HandshakeRequest {
+  return (
+    typeof request === 'object' &&
+    request !== null &&
+    typeof (request as Record<string, unknown>)['nonce'] === 'string' &&
+    ((request as Record<string, unknown>)['nonce'] as string).length > 0 &&
+    typeof (request as Record<string, unknown>)['audience'] === 'string' &&
+    ((request as Record<string, unknown>)['audience'] as string).length > 0 &&
+    typeof (request as Record<string, unknown>)['timestamp'] === 'number' &&
+    ((request as Record<string, unknown>)['timestamp'] as number) > 0 &&
+    Number.isInteger((request as Record<string, unknown>)['timestamp'])
+  );
+}
