@@ -1,12 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { createMCPIMiddleware } from '../with-mcpi.js';
+import {
+  createMCPIMiddleware,
+  type MCPIDelegationConfig,
+} from '../with-mcpi.js';
 import { NodeCryptoProvider } from '../../__tests__/utils/node-crypto-provider.js';
+import { MockFetchProvider } from '../../__tests__/utils/mock-providers.js';
 import { generateDidKeyFromBase64 } from '../../utils/did-helpers.js';
 import { DelegationCredentialIssuer } from '../../delegation/vc-issuer.js';
-import type { Proof } from '../../types/protocol.js';
-import { base64urlEncodeFromBytes } from '../../utils/base64.js';
+import type {
+  CredentialStatus,
+  DelegationCredential,
+  Proof,
+} from '../../types/protocol.js';
+import {
+  base64ToBytes,
+  base64urlEncodeFromBytes,
+} from '../../utils/base64.js';
 
-async function createTestMiddleware(options?: { autoSession?: boolean }) {
+async function createTestMiddleware(options?: {
+  autoSession?: boolean;
+  delegation?: MCPIDelegationConfig;
+}) {
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
@@ -16,12 +30,76 @@ async function createTestMiddleware(options?: { autoSession?: boolean }) {
     {
       identity: { did, kid, privateKey: keyPair.privateKey, publicKey: keyPair.publicKey },
       session: { sessionTtlMinutes: 60 },
+      delegation: options?.delegation,
       autoSession: options?.autoSession,
     },
     crypto,
   );
 
   return { middleware, did };
+}
+
+async function createDelegationIssuer(options?: { did?: string; kid?: string }) {
+  const crypto = new NodeCryptoProvider();
+  const keyPair = await crypto.generateKeyPair();
+  const did = options?.did ?? generateDidKeyFromBase64(keyPair.publicKey);
+  const kid = options?.kid ?? `${did}#keys-1`;
+
+  const signingFn = async (
+    canonicalVC: string,
+    _issuerDid: string,
+    kidArg: string,
+  ): Promise<Proof> => {
+    const data = new TextEncoder().encode(canonicalVC);
+    const sigBytes = await crypto.sign(data, keyPair.privateKey);
+    const proofValue = base64urlEncodeFromBytes(sigBytes);
+    return {
+      type: 'Ed25519Signature2020',
+      created: new Date().toISOString(),
+      verificationMethod: kidArg,
+      proofPurpose: 'assertionMethod',
+      proofValue,
+    };
+  };
+
+  const issuer = new DelegationCredentialIssuer(
+    {
+      getDid: () => did,
+      getKeyId: () => kid,
+      getPrivateKey: () => keyPair.privateKey,
+    },
+    signingFn,
+  );
+
+  return { crypto, keyPair, did, kid, issuer };
+}
+
+async function issueDelegationVC(options?: {
+  issuer?: Awaited<ReturnType<typeof createDelegationIssuer>>;
+  scopes?: string[];
+  audience?: string | string[];
+  parentId?: string;
+  credentialStatus?: CredentialStatus;
+  subjectDid?: string;
+}): Promise<DelegationCredential> {
+  const issuerIdentity = options?.issuer ?? await createDelegationIssuer();
+
+  return issuerIdentity.issuer.createAndIssueDelegation(
+    {
+      id: `test-delegation-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      issuerDid: issuerIdentity.did,
+      subjectDid: options?.subjectDid ?? issuerIdentity.did,
+      parentId: options?.parentId,
+      constraints: {
+        scopes: options?.scopes ?? [],
+        ...(options?.audience !== undefined && { audience: options.audience }),
+        notAfter: Math.floor(Date.now() / 1000) + 3600,
+      },
+    },
+    ...(options?.credentialStatus
+      ? [{ credentialStatus: options.credentialStatus }]
+      : []),
+  );
 }
 
 describe('createMCPIMiddleware', () => {
@@ -120,49 +198,6 @@ describe('createMCPIMiddleware', () => {
   });
 
   describe('wrapWithDelegation', () => {
-    async function issueDelegationVC(scopes: string[]) {
-      const crypto = new NodeCryptoProvider();
-      const keyPair = await crypto.generateKeyPair();
-      const did = generateDidKeyFromBase64(keyPair.publicKey);
-      const kid = `${did}#keys-1`;
-
-      const signingFn = async (
-        canonicalVC: string,
-        _issuerDid: string,
-        kidArg: string,
-      ): Promise<Proof> => {
-        const data = new TextEncoder().encode(canonicalVC);
-        const sigBytes = await crypto.sign(data, keyPair.privateKey);
-        const proofValue = base64urlEncodeFromBytes(sigBytes);
-        return {
-          type: 'Ed25519Signature2020',
-          created: new Date().toISOString(),
-          verificationMethod: kidArg,
-          proofPurpose: 'assertionMethod',
-          proofValue,
-        };
-      };
-
-      const issuer = new DelegationCredentialIssuer(
-        {
-          getDid: () => did,
-          getKeyId: () => kid,
-          getPrivateKey: () => keyPair.privateKey,
-        },
-        signingFn,
-      );
-
-      return issuer.createAndIssueDelegation({
-        id: `test-delegation-${Date.now()}`,
-        issuerDid: did,
-        subjectDid: did,
-        constraints: {
-          scopes,
-          notAfter: Math.floor(Date.now() / 1000) + 3600,
-        },
-      });
-    }
-
     it('should return needs_authorization when no _mcpi_delegation arg is provided', async () => {
       const { middleware: mcpi } = await createTestMiddleware();
 
@@ -185,7 +220,7 @@ describe('createMCPIMiddleware', () => {
 
     it('should reject when VC has wrong scope', async () => {
       const { middleware: mcpi } = await createTestMiddleware();
-      const vc = await issueDelegationVC(['wrong:scope']);
+      const vc = await issueDelegationVC({ scopes: ['wrong:scope'] });
 
       const handler = mcpi.wrapWithDelegation(
         'my-tool',
@@ -202,7 +237,7 @@ describe('createMCPIMiddleware', () => {
 
     it('should accept and call handler when VC has correct scope and valid signature', async () => {
       const { middleware: mcpi } = await createTestMiddleware();
-      const vc = await issueDelegationVC(['test:scope', 'other:scope']);
+      const vc = await issueDelegationVC({ scopes: ['test:scope', 'other:scope'] });
 
       const handler = mcpi.wrapWithDelegation(
         'my-tool',
@@ -218,6 +253,164 @@ describe('createMCPIMiddleware', () => {
       const parsed = JSON.parse(result.content[0].text.replace('Called: ', ''));
       // _mcpi_delegation should be stripped from args
       expect(parsed['_mcpi_delegation']).toBeUndefined();
+      expect(parsed['name']).toBe('DIF');
+    });
+
+    it('should reject credentials with credentialStatus when no status list resolver is configured', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      const vc = await issueDelegationVC({
+        scopes: ['test:scope'],
+        credentialStatus: {
+          id: 'https://status.example.com/revocation/v1#0',
+          type: 'StatusList2021Entry',
+          statusPurpose: 'revocation',
+          statusListIndex: '0',
+          statusListCredential: 'https://status.example.com/revocation/v1',
+        },
+      });
+
+      const handler = mcpi.wrapWithDelegation(
+        'my-tool',
+        { scopeId: 'test:scope', consentUrl: 'https://example.com/consent' },
+        async () => ({ content: [{ type: 'text', text: 'should not reach' }] }),
+      );
+
+      const result = await handler({ _mcpi_delegation: vc });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toBe('delegation_invalid');
+      expect(parsed.reason).toContain('statusListResolver');
+    });
+
+    it('should reject delegations whose audience does not include the server DID', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      const vc = await issueDelegationVC({
+        scopes: ['test:scope'],
+        audience: 'did:web:other.example.com',
+      });
+
+      const handler = mcpi.wrapWithDelegation(
+        'my-tool',
+        { scopeId: 'test:scope', consentUrl: 'https://example.com/consent' },
+        async () => ({ content: [{ type: 'text', text: 'should not reach' }] }),
+      );
+
+      const result = await handler({ _mcpi_delegation: vc });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toBe('delegation_invalid');
+      expect(parsed.reason).toContain('audience does not include server DID');
+    });
+
+    it('should reject parent delegations when no chain resolver is configured', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      const vc = await issueDelegationVC({
+        scopes: ['test:scope'],
+        parentId: 'parent-delegation',
+      });
+
+      const handler = mcpi.wrapWithDelegation(
+        'my-tool',
+        { scopeId: 'test:scope', consentUrl: 'https://example.com/consent' },
+        async () => ({ content: [{ type: 'text', text: 'should not reach' }] }),
+      );
+
+      const result = await handler({ _mcpi_delegation: vc });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toBe('delegation_invalid');
+      expect(parsed.reason).toContain('resolveDelegationChain');
+    });
+
+    it('should reject delegation chains that widen parent scopes', async () => {
+      const parentIssuer = await createDelegationIssuer();
+      const childIssuer = await createDelegationIssuer();
+      const leafSubject = (await createDelegationIssuer()).did;
+      const parentVc = await issueDelegationVC({
+        issuer: parentIssuer,
+        scopes: ['test:scope'],
+        subjectDid: childIssuer.did,
+      });
+      const childVc = await issueDelegationVC({
+        issuer: childIssuer,
+        scopes: ['test:scope', 'admin:scope'],
+        parentId: parentVc.credentialSubject.delegation.id,
+        subjectDid: leafSubject,
+      });
+
+      const { middleware: mcpi } = await createTestMiddleware({
+        delegation: {
+          resolveDelegationChain: async () => [parentVc],
+        },
+      });
+
+      const handler = mcpi.wrapWithDelegation(
+        'my-tool',
+        { scopeId: 'test:scope', consentUrl: 'https://example.com/consent' },
+        async () => ({ content: [{ type: 'text', text: 'should not reach' }] }),
+      );
+
+      const result = await handler({ _mcpi_delegation: childVc });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toBe('delegation_invalid');
+      expect(parsed.reason).toContain('widens scopes');
+    });
+
+    it('should accept did:web issuers when a fetch-backed resolver is available', async () => {
+      const did = 'did:web:issuer.example.com';
+      const kid = `${did}#key-1`;
+      const issuer = await createDelegationIssuer({ did, kid });
+      const vc = await issueDelegationVC({
+        issuer,
+        scopes: ['test:scope'],
+      });
+      const fetchProvider = new MockFetchProvider();
+      fetchProvider.fetch = async () =>
+        new Response(
+          JSON.stringify({
+            id: did,
+            verificationMethod: [
+              {
+                id: kid,
+                type: 'Ed25519VerificationKey2020',
+                controller: did,
+                publicKeyJwk: {
+                  kty: 'OKP',
+                  crv: 'Ed25519',
+                  x: base64urlEncodeFromBytes(base64ToBytes(issuer.keyPair.publicKey)),
+                },
+              },
+            ],
+            authentication: [kid],
+            assertionMethod: [kid],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+
+      const { middleware: mcpi } = await createTestMiddleware({
+        delegation: { fetchProvider },
+      });
+
+      const handler = mcpi.wrapWithDelegation(
+        'my-tool',
+        { scopeId: 'test:scope', consentUrl: 'https://example.com/consent' },
+        async (args) => ({
+          content: [{ type: 'text', text: `Called: ${JSON.stringify(args)}` }],
+        }),
+      );
+
+      const result = await handler({ _mcpi_delegation: vc, name: 'DIF' });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text.replace('Called: ', ''));
       expect(parsed['name']).toBe('DIF');
     });
   });

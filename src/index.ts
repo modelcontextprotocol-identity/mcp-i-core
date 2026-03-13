@@ -240,6 +240,7 @@ export {
 export {
   createMCPIMiddleware,
   type MCPIConfig,
+  type MCPIDelegationConfig,
   type MCPIIdentityConfig,
   type MCPIMiddleware,
   type MCPIToolDefinition,

@@ -10,7 +10,10 @@
  *   registerToolWithProof(server, myToolDef, myHandler);
  */
 
-import type { CryptoProvider } from "../providers/base.js";
+import {
+  type CryptoProvider,
+  FetchProvider,
+} from "../providers/base.js";
 import {
   SessionManager,
   type SessionConfig,
@@ -25,12 +28,18 @@ import {
 import { validateHandshakeFormat } from "../session/manager.js";
 import {
   DelegationCredentialVerifier,
+  type DIDResolver,
   type SignatureVerificationFunction,
+  type StatusListResolver,
 } from "../delegation/vc-verifier.js";
 import { createDidKeyResolver } from "../delegation/did-key-resolver.js";
+import { createDidWebResolver } from "../delegation/did-web-resolver.js";
+import { verifyDelegationAudience } from "../delegation/audience-validator.js";
 import {
   createNeedsAuthorizationError,
+  extractDelegationFromVC,
   type DelegationCredential,
+  type DelegationRecord,
 } from "../types/protocol.js";
 import { logger } from "../logging/index.js";
 import { canonicalizeJSON } from "../delegation/utils.js";
@@ -43,11 +52,38 @@ export interface MCPIIdentityConfig {
   publicKey: string;
 }
 
+export interface MCPIDelegationConfig {
+  /**
+   * Optional custom DID resolver. If it returns null, middleware falls back to
+   * built-in did:key resolution and fetch-backed did:web resolution.
+   */
+  didResolver?: DIDResolver;
+  /**
+   * Optional fetch provider used for did:web resolution.
+   * If omitted, middleware falls back to the runtime global fetch when available.
+   */
+  fetchProvider?: FetchProvider;
+  /**
+   * Resolver for StatusList2021 checks. Credentials with credentialStatus are
+   * rejected when no resolver is configured.
+   */
+  statusListResolver?: StatusListResolver;
+  /**
+   * Resolve ancestor credentials for a delegated chain. The returned array may
+   * contain only ancestors (root -> parent) or the full chain (root -> leaf).
+   */
+  resolveDelegationChain?: (
+    leafCredential: DelegationCredential,
+  ) => Promise<DelegationCredential[]>;
+}
+
 export interface MCPIConfig {
-  /** Agent identity (did:key + key material) */
+  /** Agent identity (DID + key material) */
   identity: MCPIIdentityConfig;
   /** Session configuration overrides */
   session?: Omit<SessionConfig, "nonceCache">;
+  /** Delegation verification overrides */
+  delegation?: MCPIDelegationConfig;
   /**
    * When true, automatically creates a session on the first tool call
    * if no session exists. Useful for demos and development where
@@ -136,6 +172,73 @@ export interface MCPIMiddleware {
   ): MCPIToolHandler;
 }
 
+class RuntimeFetchProvider extends FetchProvider {
+  async resolveDID(): Promise<null> {
+    return null;
+  }
+
+  async fetchStatusList(): Promise<null> {
+    return null;
+  }
+
+  async fetchDelegationChain(): Promise<DelegationRecord[]> {
+    return [];
+  }
+
+  async fetch(url: string, options?: unknown): Promise<Response> {
+    if (typeof globalThis.fetch !== "function") {
+      throw new Error("Global fetch is not available in this runtime");
+    }
+
+    return globalThis.fetch(url, options as RequestInit);
+  }
+}
+
+function getDelegationScopes(credential: DelegationCredential): string[] {
+  const scopes = new Set<string>();
+
+  for (const scope of credential.credentialSubject.delegation.scopes ?? []) {
+    scopes.add(scope);
+  }
+
+  for (const scope of credential.credentialSubject.delegation.constraints.scopes ?? []) {
+    scopes.add(scope);
+  }
+
+  return Array.from(scopes);
+}
+
+function validateScopeAttenuation(
+  parentCredential: DelegationCredential,
+  childCredential: DelegationCredential,
+): { valid: boolean; reason?: string } {
+  const parentScopes = getDelegationScopes(parentCredential);
+  const childScopes = getDelegationScopes(childCredential);
+  const childDelegation = childCredential.credentialSubject.delegation;
+
+  if (parentScopes.length === 0) {
+    return { valid: true };
+  }
+
+  if (childScopes.length === 0) {
+    return {
+      valid: false,
+      reason: `Delegation ${childDelegation.id} omits scopes required to prove attenuation from parent ${parentCredential.credentialSubject.delegation.id}`,
+    };
+  }
+
+  const parentScopeSet = new Set(parentScopes);
+  const widenedScopes = childScopes.filter((scope) => !parentScopeSet.has(scope));
+  if (widenedScopes.length > 0) {
+    return {
+      valid: false,
+      reason: `Delegation ${childDelegation.id} widens scopes beyond parent ${parentCredential.credentialSubject.delegation.id}: ${widenedScopes.join(", ")}`,
+    };
+  }
+
+  return { valid: true };
+}
+
 /**
  * Create MCP-I middleware for a standard MCP SDK Server.
  *
@@ -166,6 +269,7 @@ export function createMCPIMiddleware(
   });
 
   const proofGenerator = new ProofGenerator(identity, cryptoProvider);
+  const delegationConfig = config.delegation;
 
   // Session map: sessionId → last nonce (for proof generation)
   const sessionNonces = new Map<string, string>();
@@ -326,7 +430,36 @@ export function createMCPIMiddleware(
     config: { scopeId: string; consentUrl: string },
     handler: MCPIToolHandler,
   ): MCPIToolHandler {
-    const didResolver = createDidKeyResolver();
+    const didKeyResolver = createDidKeyResolver();
+    const fetchProvider =
+      delegationConfig?.fetchProvider ??
+      (typeof globalThis.fetch === "function"
+        ? new RuntimeFetchProvider()
+        : undefined);
+    const didWebResolver = fetchProvider
+      ? createDidWebResolver(fetchProvider)
+      : undefined;
+    const didResolver: DIDResolver = {
+      async resolve(did: string) {
+        const customResolver = delegationConfig?.didResolver;
+        if (customResolver) {
+          const resolved = await customResolver.resolve(did);
+          if (resolved) {
+            return resolved;
+          }
+        }
+
+        if (did.startsWith("did:key:")) {
+          return didKeyResolver.resolve(did);
+        }
+
+        if (did.startsWith("did:web:")) {
+          return didWebResolver?.resolve(did) ?? null;
+        }
+
+        return null;
+      },
+    };
 
     const signatureVerifier: SignatureVerificationFunction = async (
       vc: DelegationCredential,
@@ -374,7 +507,157 @@ export function createMCPIMiddleware(
     const verifier = new DelegationCredentialVerifier({
       didResolver,
       signatureVerifier,
+      statusListResolver: delegationConfig?.statusListResolver,
     });
+
+    const buildDelegationErrorResponse = (
+      error: string,
+      reason: string,
+    ): Awaited<ReturnType<MCPIToolHandler>> => ({
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ error, reason }),
+        },
+      ],
+      isError: true,
+    });
+
+    const validateDelegationChain = async (
+      leafCredential: DelegationCredential,
+    ): Promise<{ valid: boolean; reason?: string }> => {
+      const leafDelegation = extractDelegationFromVC(leafCredential);
+      let chain: DelegationCredential[] = [leafCredential];
+
+      if (leafDelegation.parentId) {
+        if (!delegationConfig?.resolveDelegationChain) {
+          return {
+            valid: false,
+            reason: `Delegation ${leafDelegation.id} references parent ${leafDelegation.parentId} but no resolveDelegationChain handler is configured`,
+          };
+        }
+
+        let resolvedChain: DelegationCredential[];
+        try {
+          resolvedChain =
+            await delegationConfig.resolveDelegationChain(leafCredential);
+        } catch (error) {
+          return {
+            valid: false,
+            reason: `Failed to resolve delegation chain: ${error instanceof Error ? error.message : "Unknown error"}`,
+          };
+        }
+
+        if (resolvedChain.length === 0) {
+          return {
+            valid: false,
+            reason: `Delegation ${leafDelegation.id} references parent ${leafDelegation.parentId} but the resolved chain is empty`,
+          };
+        }
+
+        const leafIndex = resolvedChain.findIndex(
+          (credential) =>
+            credential.credentialSubject.delegation.id === leafDelegation.id,
+        );
+        if (leafIndex !== -1 && leafIndex !== resolvedChain.length - 1) {
+          return {
+            valid: false,
+            reason: `Resolved delegation chain for ${leafDelegation.id} must end with the leaf credential`,
+          };
+        }
+
+        chain =
+          leafIndex === -1 ? [...resolvedChain, leafCredential] : resolvedChain;
+      }
+
+      const seenIds = new Set<string>();
+      let previousDelegation: DelegationRecord | undefined;
+      let previousCredential: DelegationCredential | undefined;
+
+      for (const credential of chain) {
+        const delegation = extractDelegationFromVC(credential);
+
+        if (seenIds.has(delegation.id)) {
+          return {
+            valid: false,
+            reason: `Delegation chain contains a circular reference at ${delegation.id}`,
+          };
+        }
+        seenIds.add(delegation.id);
+
+        if (credential.credentialStatus && !delegationConfig?.statusListResolver) {
+          return {
+            valid: false,
+            reason: `Delegation ${delegation.id} has credentialStatus but no statusListResolver is configured`,
+          };
+        }
+
+        const credentialVerification = await verifier.verifyDelegationCredential(
+          credential,
+        );
+        if (!credentialVerification.valid) {
+          return {
+            valid: false,
+            reason: `Delegation ${delegation.id} invalid: ${credentialVerification.reason}`,
+          };
+        }
+
+        if (!verifyDelegationAudience(delegation, identity.did)) {
+          return {
+            valid: false,
+            reason: `Delegation ${delegation.id} audience does not include server DID ${identity.did}`,
+          };
+        }
+
+        if (!previousDelegation || !previousCredential) {
+          if (delegation.parentId) {
+            return {
+              valid: false,
+              reason: `Resolved delegation chain is incomplete: root delegation ${delegation.id} still references parent ${delegation.parentId}`,
+            };
+          }
+
+          previousDelegation = delegation;
+          previousCredential = credential;
+          continue;
+        }
+
+        if (delegation.parentId !== previousDelegation.id) {
+          return {
+            valid: false,
+            reason: `Delegation ${delegation.id} references parent ${delegation.parentId} but expected ${previousDelegation.id}`,
+          };
+        }
+
+        if (delegation.issuerDid !== previousDelegation.subjectDid) {
+          return {
+            valid: false,
+            reason: `Delegation ${delegation.id} issued by ${delegation.issuerDid} but parent subject is ${previousDelegation.subjectDid}`,
+          };
+        }
+
+        const scopeValidation = validateScopeAttenuation(
+          previousCredential,
+          credential,
+        );
+        if (!scopeValidation.valid) {
+          return scopeValidation;
+        }
+
+        previousDelegation = delegation;
+        previousCredential = credential;
+      }
+
+      const finalDelegation = extractDelegationFromVC(chain[chain.length - 1]!);
+      if (finalDelegation.id !== leafDelegation.id) {
+        return {
+          valid: false,
+          reason: `Resolved delegation chain ended at ${finalDelegation.id} instead of leaf ${leafDelegation.id}`,
+        };
+      }
+
+      return { valid: true };
+    };
 
     return async (
       args: Record<string, unknown>,
@@ -410,46 +693,28 @@ export function createMCPIMiddleware(
         };
       }
 
-      // Verify the delegation VC
       const vc = delegationArg as DelegationCredential;
-      const verificationResult = await verifier.verifyDelegationCredential(vc);
+      const verificationResult = await validateDelegationChain(vc);
 
       if (!verificationResult.valid) {
         logger.warn(
           `[mcpi] Delegation verification failed for "${toolName}": ${verificationResult.reason}`,
         );
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: "delegation_invalid",
-                reason: verificationResult.reason,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return buildDelegationErrorResponse(
+          "delegation_invalid",
+          verificationResult.reason ?? "Unknown delegation validation error",
+        );
       }
 
-      // Check that required scope is present in credentialSubject.delegation.scopes
-      const scopes = vc.credentialSubject.delegation.scopes;
-      if (!scopes || !scopes.includes(config.scopeId)) {
+      const scopes = getDelegationScopes(vc);
+      if (!scopes.includes(config.scopeId)) {
         logger.warn(
           `[mcpi] Delegation missing required scope "${config.scopeId}" for "${toolName}"`,
         );
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: "delegation_scope_missing",
-                reason: `Required scope "${config.scopeId}" not in delegation scopes`,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return buildDelegationErrorResponse(
+          "delegation_scope_missing",
+          `Required scope "${config.scopeId}" not in delegation scopes`,
+        );
       }
 
       // Strip _mcpi_delegation from args before passing to handler
