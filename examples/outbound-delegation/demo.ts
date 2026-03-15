@@ -210,19 +210,16 @@ async function main() {
 
   const targetUrl = 'https://downstream-api.example.com/v1/data';
 
-  const headers = await buildOutboundDelegationHeaders(
-    {
-      session,
-      delegation,
-      serverIdentity: {
-        did: serverADid,
-        kid: serverAKid,
-        privateKey: serverAKeys.privateKey,
-      },
-      targetUrl,
+  const headers = await buildOutboundDelegationHeaders({
+    session,
+    delegation,
+    serverIdentity: {
+      did: serverADid,
+      kid: serverAKid,
+      privateKey: serverAKeys.privateKey,
     },
-    cryptoProvider
-  );
+    targetUrl,
+  });
 
   console.log('Outbound Headers:');
   console.log(`  X-Agent-DID:        ${headers['X-Agent-DID'].slice(0, 40)}...`);

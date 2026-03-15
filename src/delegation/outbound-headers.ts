@@ -14,7 +14,6 @@
  */
 
 import type { SessionContext, DelegationRecord } from '../types/protocol.js';
-import type { CryptoProvider } from '../providers/base.js';
 import { buildDelegationProofJWT, type Ed25519PrivateJWK } from './outbound-proof.js';
 import { extractPublicKeyFromDidKey, isEd25519DidKey } from './did-key-resolver.js';
 import { base64ToBytes, base64urlEncodeFromBytes } from '../utils/base64.js';
@@ -112,7 +111,6 @@ function buildPrivateKeyJwk(
  * downstream service can independently verify the delegation chain.
  *
  * @param context - The delegation context including session, delegation, and server identity
- * @param _cryptoProvider - CryptoProvider (reserved for future use)
  * @returns Headers object to attach to the outbound request
  *
  * @throws {Error} If session is missing agentDid or sessionId
@@ -126,7 +124,7 @@ function buildPrivateKeyJwk(
  *   delegation,
  *   serverIdentity: { did: serverDid, kid: serverKid, privateKey },
  *   targetUrl: 'https://downstream-api.example.com/resource',
- * }, cryptoProvider);
+ * });
  *
  * // Attach headers to your HTTP request
  * fetch(targetUrl, { headers });
@@ -134,7 +132,6 @@ function buildPrivateKeyJwk(
  */
 export async function buildOutboundDelegationHeaders(
   context: OutboundDelegationContext,
-  _cryptoProvider: CryptoProvider
 ): Promise<OutboundDelegationHeaders> {
   const { session, delegation, serverIdentity, targetUrl } = context;
 

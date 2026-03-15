@@ -686,6 +686,42 @@ MCP-I servers SHOULD expose `/.well-known/mcpi`:
 - High-security deployments MAY require real-time revocation checks
 - Cascading revocation MUST be atomic
 
+### 11.6 Confused Deputy Attacks
+
+A confused deputy attack occurs when Agent B receives a valid delegation from Agent A, then uses it to invoke tools that Agent A did not intend. Because delegation scopes may be coarse-grained (e.g., `tool:*`), the delegated agent may access resources beyond the delegator's intent.
+
+- Servers SHOULD enforce the principle of least privilege when issuing delegations
+- Delegation scopes SHOULD be as narrow as possible (prefer `tool:read_file` over `tool:*`)
+- CRISP `matcher: 'exact'` SHOULD be used for sensitive resources
+- Servers MAY implement per-delegation call logging to detect misuse
+
+### 11.7 Downgrade Attacks
+
+An adversary or non-compliant client may omit MCP-I headers entirely, bypassing identity and delegation checks. Because MCP-I is an extension to MCP, a server cannot distinguish between a client that does not support MCP-I and one that is deliberately stripping identity headers.
+
+- Servers that require identity MUST reject tool calls without a valid session (fail-closed)
+- Servers SHOULD NOT fall back to unauthenticated mode for tools that require delegation
+- The `/.well-known/mcpi` endpoint allows clients to discover server requirements before connecting
+
+### 11.8 Delegation Credential Theft
+
+If a DelegationCredential is intercepted (e.g., via a compromised transport or log exposure), an attacker may present it to other servers. The `audience` constraint in the credential limits where it can be used, but does not bind it to a specific session or transport channel.
+
+- Delegations SHOULD include an `audience` constraint limiting them to the intended server DID
+- Delegations SHOULD use short `notAfter` expiration windows
+- Servers SHOULD bind delegation context to the session that presented it
+- High-security deployments SHOULD use session-scoped delegations (include `sessionId` in constraints)
+- Revocation via StatusList2021 provides a mitigation path for stolen credentials
+
+### 11.9 Session Exhaustion (Denial of Service)
+
+An attacker may send a large volume of valid handshake requests to exhaust server memory.
+
+- Implementations MUST enforce a maximum number of concurrent sessions
+- Implementations SHOULD evict the oldest sessions when the limit is reached
+- Rate limiting on the handshake endpoint is RECOMMENDED
+- Distributed deployments SHOULD use external session storage with built-in TTL eviction
+
 ---
 
 ## 12. Privacy Considerations
