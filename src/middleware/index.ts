@@ -23,3 +23,9 @@ export {
   generateIdentity,
   type WithMCPIOptions,
 } from './with-mcpi-server.js';
+
+export {
+  createMCPITransport,
+  type Transport,
+  type JSONRPCMessage,
+} from './mcpi-transport.js';

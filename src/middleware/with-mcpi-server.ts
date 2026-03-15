@@ -8,6 +8,7 @@
  *   import { withMCPI } from '@mcp-i/core/middleware';
  *   const mcpi = await withMCPI(server, { crypto: new NodeCryptoProvider() });
  *   // All tools registered on `server` now get proofs automatically.
+ *   await server.connect(transport); // transport is transparently wrapped
  */
 
 import type { CryptoProvider } from "../providers/base.js";
@@ -18,6 +19,7 @@ import {
   type MCPIDelegationConfig,
   type MCPIMiddleware,
 } from "./with-mcpi.js";
+import { createMCPITransport, type Transport } from "./mcpi-transport.js";
 import { z } from "zod";
 
 export interface WithMCPIOptions {
@@ -61,10 +63,8 @@ export async function generateIdentity(
  * Matches the public API of @modelcontextprotocol/sdk McpServer.
  */
 interface McpServerLike {
-  server: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    [key: string]: any;
-  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  connect(transport: Transport): Promise<any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registerTool(...args: any[]): void;
 }
@@ -74,9 +74,19 @@ interface McpServerLike {
  *
  * 1. Auto-generates Ed25519 identity (or uses provided one)
  * 2. Registers `_mcpi_handshake` tool
- * 3. Intercepts the `tools/call` request handler to auto-attach proofs
+ * 3. Patches `server.connect()` to transparently wrap the transport with
+ *    MCPITransport, which injects detached proofs into all `tools/call`
+ *    responses using only the public Transport interface.
  *
- * @param server - McpServer instance
+ * The user-facing API is unchanged — register tools before or after this
+ * call, then connect as normal:
+ *
+ * ```ts
+ * const mcpi = await withMCPI(server, { crypto: new NodeCryptoProvider() });
+ * await server.connect(transport); // MCPITransport wraps silently
+ * ```
+ *
+ * @param server  - McpServer instance
  * @param options - Configuration
  * @returns The MCPIMiddleware instance for advanced usage (wrapWithDelegation, etc.)
  */
@@ -112,7 +122,9 @@ export async function withMCPI(
       },
     },
     async (args: unknown) => {
-      const result = await mcpi.handleHandshake(args as Record<string, unknown>);
+      const result = await mcpi.handleHandshake(
+        args as Record<string, unknown>,
+      );
       return {
         ...result,
         content: result.content.map((c) => ({ ...c, type: "text" as const })),
@@ -120,65 +132,18 @@ export async function withMCPI(
     },
   );
 
-  // Auto-proof interception: wrap the tools/call handler
-  const proofAllTools = options.proofAllTools ?? true;
+  // Auto-proof interception via transport wrapper (public API only).
+  //
+  // We patch server.connect() so that whatever transport the caller passes
+  // is silently wrapped with MCPITransport before McpServer sees it.
+  // Tool registration order does not matter — proofs are injected at the
+  // transport boundary, after McpServer has already dispatched the call.
+  if (options.proofAllTools !== false) {
+    const exclude = ["_mcpi_handshake", ...(options.excludeTools ?? [])];
+    const originalConnect = server.connect.bind(server);
 
-  if (proofAllTools) {
-    const lowLevel = server.server;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-    const handlers: Map<string, Function> = lowLevel._requestHandlers;
-    const original = handlers.get("tools/call");
-
-    if (original) {
-      handlers.set(
-        "tools/call",
-        async (request: Record<string, unknown>, extra: unknown) => {
-          const result = (await (
-            original as (
-              req: Record<string, unknown>,
-              ext: unknown,
-            ) => Promise<Record<string, unknown>>
-          )(request, extra)) as {
-            content?: Array<{
-              type: string;
-              text: string;
-              [key: string]: unknown;
-            }>;
-            isError?: boolean;
-            _meta?: Record<string, unknown>;
-            [key: string]: unknown;
-          };
-
-          const params = request.params as
-            | { name?: string; arguments?: Record<string, unknown> }
-            | undefined;
-          const toolName = params?.name;
-
-          if (
-            !toolName ||
-            toolName === "_mcpi_handshake" ||
-            result.isError
-          ) {
-            return result;
-          }
-
-          if (options.excludeTools?.includes(toolName)) {
-            return result;
-          }
-
-          // Use wrapWithProof to add proof — it handles session management
-          const addProof = mcpi.wrapWithProof(
-            toolName,
-            async () => result as {
-              content: Array<{ type: string; text: string; [key: string]: unknown }>;
-              isError?: boolean;
-              [key: string]: unknown;
-            },
-          );
-          return addProof(params?.arguments ?? {});
-        },
-      );
-    }
+    server.connect = (transport: Transport) =>
+      originalConnect(createMCPITransport(transport, mcpi, exclude));
   }
 
   return mcpi;
