@@ -246,6 +246,9 @@ export {
   type MCPIToolDefinition,
   type MCPIToolHandler,
   type MCPIServer,
+  withMCPI,
+  generateIdentity,
+  type WithMCPIOptions,
 } from './middleware/index.js';
 
 // Logging

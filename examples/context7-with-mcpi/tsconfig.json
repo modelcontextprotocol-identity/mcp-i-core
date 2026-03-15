@@ -9,10 +9,14 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "../../",
     "declaration": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*",
+    "../../src/**/*",
+    "../node-server/node-crypto.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

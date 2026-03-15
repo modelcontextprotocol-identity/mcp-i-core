@@ -22,7 +22,7 @@ Spec: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.i
 | **proof** | Platform-agnostic proof generation (`ProofGenerator`) and server-side verification (`ProofVerifier`) — JCS canonicalization, SHA-256 hashing, Ed25519 JWS signing/verification |
 | **session** | Handshake validation and session management (`SessionManager`) with nonce replay prevention |
 | **auth** | Authorization handshake orchestration (`verifyOrHints`) — checks delegation and returns authorization hints |
-| **middleware** | MCP SDK integration (`createMCPIMiddleware`) — adds identity, sessions, and proof generation to a standard `@modelcontextprotocol/sdk` Server |
+| **middleware** | MCP SDK integration — `withMCPI(server, { crypto })` adds identity, sessions, and auto-proof to any `McpServer` in one call. Lower-level `createMCPIMiddleware` available for the `Server` API. |
 | **providers** | Abstract base classes (`CryptoProvider`, `StorageProvider`, etc.) and in-memory implementations for testing |
 | **types** | Pure TypeScript interfaces for all protocol types — zero runtime dependencies |
 
@@ -55,7 +55,7 @@ npm install @mcpi/core
 
 ## Delegation Hardening Compatibility
 
-`createMCPIMiddleware` now enforces strict delegation-chain and status-list checks by default.
+MCP-I now enforces strict delegation-chain and status-list checks by default.
 
 - Credentials with `parentId` require `delegation.resolveDelegationChain`.
 - Credentials with `credentialStatus` require `delegation.statusListResolver`.
@@ -63,15 +63,12 @@ npm install @mcpi/core
 For temporary migration support in legacy integrations, you can opt in to compatibility mode:
 
 ```typescript
-const mcpi = createMCPIMiddleware(
-  {
-    identity,
-    delegation: {
-      allowLegacyUnsafeDelegation: true, // temporary compatibility escape hatch
-    },
+await withMCPI(server, {
+  crypto: new NodeCryptoProvider(),
+  delegation: {
+    allowLegacyUnsafeDelegation: true, // temporary compatibility escape hatch
   },
-  cryptoProvider
-);
+});
 ```
 
 Compatibility mode weakens security guarantees and should only be used during migration.
@@ -316,23 +313,47 @@ console.log('Agent DID:', proof.meta.did);
 
 ---
 
-## Example 4 — MCP Server with Middleware
+## Example 4 — MCP Server with Middleware (`withMCPI`)
+
+The recommended way to add MCP-I to any `McpServer`-based server:
 
 ```typescript
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { createMCPIMiddleware, CryptoProvider } from '@mcpi/core';
+import { withMCPI, CryptoProvider } from '@mcpi/core';
+import { z } from 'zod';
 
 // ... (NodeCryptoProvider as above)
 
-const crypto = new NodeCryptoProvider();
-const keys = await crypto.generateKeyPair();
+const server = new McpServer({ name: 'my-server', version: '1.0.0' });
 
-const mcpi = createMCPIMiddleware({
-  identity: { did: 'did:key:z...', kid: 'did:key:z...#key-1', ...keys },
-  session: { sessionTtlMinutes: 60 },
-}, crypto);
+// One call: auto-generates identity, registers handshake, auto-proofs all tools
+await withMCPI(server, { crypto: new NodeCryptoProvider() });
+
+// Register tools normally — proofs are attached automatically
+server.registerTool(
+  'echo',
+  { description: 'Echo a message', inputSchema: { message: z.string() } },
+  async ({ message }) => ({ content: [{ type: 'text' as const, text: `Echo: ${message}` }] }),
+);
+
+await server.connect(new StdioServerTransport());
+```
+
+<details>
+<summary>Low-level Server API (advanced)</summary>
+
+For the low-level `Server` API with manual request handlers, use `createMCPIMiddleware` directly:
+
+```typescript
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createMCPIMiddleware, generateIdentity } from '@mcpi/core';
+
+const crypto = new NodeCryptoProvider();
+const identity = await generateIdentity(crypto);
+
+const mcpi = createMCPIMiddleware({ identity, session: { sessionTtlMinutes: 60 } }, crypto);
 
 const echo = mcpi.wrapWithProof('echo', async (args) => ({
   content: [{ type: 'text', text: `Echo: ${args['message']}` }],
@@ -346,12 +367,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === '_mcpi_handshake') return mcpi.handleHandshake(req.params.arguments ?? {});
-  if (req.params.name === 'echo') return echo(req.params.arguments ?? {}, req.params.arguments?.['sessionId']);
+  if (req.params.name === 'echo') return echo(req.params.arguments ?? {});
   return { content: [{ type: 'text', text: 'Unknown tool' }], isError: true };
 });
 
 await server.connect(new StdioServerTransport());
 ```
+
+</details>
 
 ---
 

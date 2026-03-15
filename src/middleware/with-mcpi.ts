@@ -1,13 +1,18 @@
 /**
- * MCP-I Middleware for @modelcontextprotocol/sdk Server
+ * MCP-I Middleware — Core Implementation
  *
- * Adds identity, session management, and proof generation to a standard
- * MCP SDK Server.
+ * Adds identity, session management, and proof generation to MCP servers.
  *
- * Usage:
- *   const { handshakeTool, registerToolWithProof } = createMCPIMiddleware(config, crypto);
- *   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [handshakeTool, ...] }));
- *   registerToolWithProof(server, myToolDef, myHandler);
+ * For most use cases, prefer the high-level `withMCPI()` adapter from
+ * `./with-mcpi-server.ts` which auto-registers the handshake tool and
+ * auto-attaches proofs to all tool responses:
+ *
+ *   import { withMCPI } from '@mcpi/core';
+ *   await withMCPI(server, { crypto: new NodeCryptoProvider() });
+ *
+ * `createMCPIMiddleware()` in this file is the lower-level API used
+ * internally by `withMCPI()` and for advanced use cases like the
+ * low-level `Server` API or custom request handler patterns.
  */
 
 import {
@@ -115,9 +120,11 @@ export interface MCPIToolDefinition {
   };
 }
 
-export interface MCPIToolHandler {
+export interface MCPIToolHandler<
+  T extends Record<string, unknown> = Record<string, unknown>,
+> {
   (
-    args: Record<string, unknown>,
+    args: T,
     sessionId?: string,
   ): Promise<{
     content: Array<{ type: string; text: string; [key: string]: unknown }>;
@@ -138,6 +145,9 @@ export interface MCPIServer {
 }
 
 export interface MCPIMiddleware {
+  /** The identity config used by this middleware instance */
+  identity: MCPIIdentityConfig;
+
   /** The SessionManager instance for manual session operations */
   sessionManager: SessionManager;
 
@@ -163,7 +173,10 @@ export interface MCPIMiddleware {
    * Wrap a tool handler to automatically generate proofs.
    * Returns a new handler that appends proof metadata to the response.
    */
-  wrapWithProof(toolName: string, handler: MCPIToolHandler): MCPIToolHandler;
+  wrapWithProof<T extends Record<string, unknown> = Record<string, unknown>>(
+    toolName: string,
+    handler: MCPIToolHandler<T>,
+  ): MCPIToolHandler;
 
   /**
    * Wrap a tool handler to require a valid W3C Delegation Credential.
@@ -252,6 +265,14 @@ function validateScopeAttenuation(
 
 /**
  * Create MCP-I middleware for a standard MCP SDK Server.
+ *
+ * For most use cases, prefer {@link withMCPI} from `./with-mcpi-server.ts`
+ * which wraps this function and auto-registers handshake + auto-attaches proofs.
+ *
+ * Use `createMCPIMiddleware` directly when:
+ * - You use the low-level `Server` API (not `McpServer`)
+ * - You need custom request handler patterns
+ * - You want per-tool control over proof/delegation wrapping
  *
  * @param config - Agent identity and session configuration
  * @param cryptoProvider - Platform-specific crypto implementation
@@ -756,6 +777,7 @@ export function createMCPIMiddleware(
   }
 
   return {
+    identity: config.identity,
     sessionManager,
     proofGenerator,
     handshakeTool,

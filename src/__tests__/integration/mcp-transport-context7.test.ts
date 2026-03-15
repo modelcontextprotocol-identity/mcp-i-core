@@ -15,6 +15,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { z } from 'zod';
 import { createMCPIMiddleware } from '../../middleware/with-mcpi.js';
+import { withMCPI } from '../../middleware/with-mcpi-server.js';
 import { NodeCryptoProvider } from '../utils/node-crypto-provider.js';
 import { generateDidKeyFromBase64 } from '../../utils/did-helpers.js';
 
@@ -269,5 +270,144 @@ describe('McpServer (High-Level API) + MCP-I Integration', () => {
 
     // Same session ID across tools
     expect(proof1.meta.sessionId).toBe(proof2.meta.sessionId);
+  });
+});
+
+// ── withMCPI() path — same tests, dream API ───────────────────
+
+describe('McpServer + withMCPI() (Dream API)', () => {
+  const pairs: Array<{ client: Client; server: McpServer }> = [];
+
+  afterEach(async () => {
+    for (const pair of pairs) {
+      await pair.client.close();
+      await pair.server.close();
+    }
+    pairs.length = 0;
+  });
+
+  async function createWithMCPIPair(options?: { autoSession?: boolean }) {
+    const crypto = new NodeCryptoProvider();
+    const server = new McpServer(
+      { name: 'mcpi-withmcpi-test', version: '1.0.0' },
+      { instructions: 'Test server for withMCPI integration' },
+    );
+
+    const mcpi = await withMCPI(server, {
+      crypto,
+      autoSession: options?.autoSession ?? true,
+    });
+
+    // Register tools AFTER withMCPI — they should still get proofs
+    server.registerTool(
+      'search',
+      {
+        description: 'Search for something',
+        inputSchema: { query: z.string().describe('Search query') },
+        annotations: { readOnlyHint: true },
+      },
+      async ({ query }) => ({
+        content: [{ type: 'text', text: `Found results for: ${query}` }],
+      }),
+    );
+
+    server.registerTool(
+      'fetch-docs',
+      {
+        description: 'Fetch documentation for a library',
+        inputSchema: {
+          libraryId: z.string().describe('Library identifier'),
+          query: z.string().describe('What to search for in docs'),
+        },
+      },
+      async ({ libraryId }) => ({
+        content: [{ type: 'text', text: `Docs for ${libraryId}: example content` }],
+      }),
+    );
+
+    const client = new Client(
+      { name: 'mcpi-withmcpi-test-client', version: '1.0.0' },
+    );
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    pairs.push({ client, server });
+    return { client, server, mcpi };
+  }
+
+  it('listTools returns handshake + registered tools (withMCPI)', async () => {
+    const { client } = await createWithMCPIPair();
+
+    const result = await client.listTools();
+    const toolNames = result.tools.map((t) => t.name);
+
+    expect(toolNames).toContain('_mcpi_handshake');
+    expect(toolNames).toContain('search');
+    expect(toolNames).toContain('fetch-docs');
+  });
+
+  it('autoSession attaches proof without handshake (withMCPI)', async () => {
+    const { client } = await createWithMCPIPair();
+
+    const result = await client.callTool({
+      name: 'search',
+      arguments: { query: 'next.js routing' },
+    });
+
+    const first = result.content[0] as { type: string; text: string };
+    expect(first.text).toBe('Found results for: next.js routing');
+
+    expect(result._meta).toBeDefined();
+    const proof = (result._meta as Record<string, unknown>).proof as {
+      jws: string;
+      meta: Record<string, unknown>;
+    };
+    expect(proof).toBeDefined();
+    expect(proof.jws).toBeDefined();
+    expect(proof.meta.sessionId).toMatch(/^mcpi_/);
+  });
+
+  it('handshake works through withMCPI', async () => {
+    const { client, mcpi } = await createWithMCPIPair({ autoSession: false });
+
+    const result = await client.callTool({
+      name: '_mcpi_handshake',
+      arguments: {
+        nonce: `withmcpi-test-${Date.now()}`,
+        audience: mcpi.identity.did,
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+
+    const first = result.content[0] as { type: string; text: string };
+    const parsed = JSON.parse(first.text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.sessionId).toMatch(/^mcpi_/);
+    expect(parsed.serverDid).toBe(mcpi.identity.did);
+  });
+
+  it('no per-tool wrapping needed — proofs are automatic (withMCPI)', async () => {
+    const { client } = await createWithMCPIPair();
+
+    // Both tools should get proofs without any manual wrapping
+    const searchResult = await client.callTool({
+      name: 'search',
+      arguments: { query: 'react hooks' },
+    });
+    const docsResult = await client.callTool({
+      name: 'fetch-docs',
+      arguments: { libraryId: '/vercel/next.js', query: 'app router' },
+    });
+
+    for (const result of [searchResult, docsResult]) {
+      expect(result._meta).toBeDefined();
+      const proof = (result._meta as Record<string, unknown>).proof as {
+        jws: string;
+      };
+      expect(proof).toBeDefined();
+      expect(proof.jws).toBeDefined();
+    }
   });
 });

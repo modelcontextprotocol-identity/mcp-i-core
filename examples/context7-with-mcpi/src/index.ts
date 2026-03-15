@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * Context7 MCP Server — Modified with MCP-I Integration
+ * Context7 MCP Server — Modified with MCP-I Identity
  *
  * This is a copy of @upstash/context7-mcp (v2.1.4) with MCP-I identity,
- * session management, and proof generation added.
+ * session management, and proof generation added via `withMCPI()`.
  *
  * Changes from original:
- *   1. Import MCP-I middleware + crypto provider (~3 lines)
- *   2. Generate identity + create middleware (~15 lines, in main())
- *   3. Register `_mcpi_handshake` tool (~10 lines)
- *   4. Wrap each tool handler with `wrapWithProof` (~5 lines per tool)
+ *   1. Import `withMCPI` + `NodeCryptoProvider` (2 lines)
+ *   2. Call `await withMCPI(server, { crypto })` (1 line)
  *
- * Total additions: ~40 lines. No changes to mcp-i-core required.
+ * That's it. Handshake tool is auto-registered, proofs are auto-attached
+ * to all tool responses.
  *
  * See notes.md for full audit findings.
  */
@@ -31,9 +30,8 @@ import { AsyncLocalStorage } from "async_hooks";
 import { SERVER_VERSION, RESOURCE_URL, AUTH_SERVER_URL } from "./lib/constants.js";
 
 // ── MCP-I imports ──────────────────────────────────────────────────
-import { createMCPIMiddleware } from '../../../src/middleware/with-mcpi.js';
+import { withMCPI } from '../../../src/middleware/with-mcpi-server.js';
 import { NodeCryptoProvider } from '../../node-server/node-crypto.js';
-import { generateDidKeyFromBase64 } from '../../../src/utils/did-helpers.js';
 
 /** Default HTTP server port */
 const DEFAULT_PORT = 3000;
@@ -104,6 +102,7 @@ function getClientIp(req: express.Request): string | undefined {
 
   if (forwardedFor) {
     const ips = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+    if (!ips) return undefined;
     const ipList = ips.split(",").map((ip) => ip.trim());
 
     for (const ip of ipList) {
@@ -116,7 +115,7 @@ function getClientIp(req: express.Request): string | undefined {
         return plainIp;
       }
     }
-    return ipList[0].replace(/^::ffff:/, "");
+    return ipList[0]?.replace(/^::ffff:/, "");
   }
 
   if (req.socket?.remoteAddress) {
@@ -126,23 +125,6 @@ function getClientIp(req: express.Request): string | undefined {
 }
 
 async function main() {
-  // ── MCP-I: Generate server identity ────────────────────────────
-  const crypto = new NodeCryptoProvider();
-  const keyPair = await crypto.generateKeyPair();
-  const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#keys-1`;
-
-  console.error(`[mcpi] Agent DID: ${did}`);
-
-  const mcpi = createMCPIMiddleware(
-    {
-      identity: { did, kid, privateKey: keyPair.privateKey, publicKey: keyPair.publicKey },
-      session: { sessionTtlMinutes: 60 },
-      autoSession: true,
-    },
-    crypto,
-  );
-
   // ── Create McpServer ───────────────────────────────────────────
 
   const server = new McpServer(
@@ -166,53 +148,11 @@ async function main() {
     }
   };
 
-  // ── MCP-I: Register handshake tool ─────────────────────────────
-  server.registerTool(
-    "_mcpi_handshake",
-    {
-      description: "MCP-I identity handshake — establishes a cryptographic session",
-      inputSchema: {
-        nonce: z.string().describe("Client-generated unique nonce"),
-        audience: z.string().describe("Intended audience (server DID or URL)"),
-        timestamp: z.number().describe("Unix epoch seconds"),
-      },
-    },
-    async (args) => mcpi.handleHandshake(args as Record<string, unknown>),
-  );
+  // ── MCP-I: 2 lines to add identity + proofs to all tools ──────
+  const mcpi = await withMCPI(server, { crypto: new NodeCryptoProvider() });
+  console.error(`[mcpi] Server DID: ${mcpi.identity.did}`);
 
-  // ── MCP-I: Wrap resolve-library-id with proof ─────────────────
-  const resolveHandler = mcpi.wrapWithProof(
-    "resolve-library-id",
-    async (args) => {
-      const { query, libraryName } = args as { query: string; libraryName: string };
-
-      const searchResponse = await searchLibraries(query, libraryName, getClientContext());
-
-      if (!searchResponse.results || searchResponse.results.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: searchResponse.error
-                ? searchResponse.error
-                : "No libraries found matching the provided name.",
-            },
-          ],
-        };
-      }
-
-      const resultsText = formatSearchResults(searchResponse);
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Available Libraries:\n\n${resultsText}`,
-          },
-        ],
-      };
-    },
-  );
+  // ── Register tools normally — proofs attached automatically ────
 
   server.registerTool(
     "resolve-library-id",
@@ -235,22 +175,29 @@ IMPORTANT: Do not call this tool more than 3 times per question.`,
         readOnlyHint: true,
       },
     },
-    async (args) => resolveHandler(args as Record<string, unknown>),
-  );
+    async ({ query, libraryName }) => {
+      const searchResponse = await searchLibraries(query, libraryName, getClientContext());
 
-  // ── MCP-I: Wrap query-docs with proof ──────────────────────────
-  const queryDocsHandler = mcpi.wrapWithProof(
-    "query-docs",
-    async (args) => {
-      const { query, libraryId } = args as { query: string; libraryId: string };
+      if (!searchResponse.results || searchResponse.results.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: searchResponse.error
+                ? searchResponse.error
+                : "No libraries found matching the provided name.",
+            },
+          ],
+        };
+      }
 
-      const response = await fetchLibraryContext({ query, libraryId }, getClientContext());
+      const resultsText = formatSearchResults(searchResponse);
 
       return {
         content: [
           {
-            type: "text",
-            text: response.data,
+            type: "text" as const,
+            text: `Available Libraries:\n\n${resultsText}`,
           },
         ],
       };
@@ -278,7 +225,18 @@ IMPORTANT: Do not call this tool more than 3 times per question.`,
         readOnlyHint: true,
       },
     },
-    async (args) => queryDocsHandler(args as Record<string, unknown>),
+    async ({ query, libraryId }) => {
+      const response = await fetchLibraryContext({ query, libraryId }, getClientContext());
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: response.data,
+          },
+        ],
+      };
+    },
   );
 
   // ── Transport ──────────────────────────────────────────────────
@@ -485,7 +443,7 @@ IMPORTANT: Do not call this tool more than 3 times per question.`,
         console.error(
           `Context7 MCP Server v${SERVER_VERSION} + MCP-I running on HTTP at http://localhost:${port}/mcp`
         );
-        console.error(`[mcpi] Server DID: ${did}`);
+        console.error(`[mcpi] Server DID: ${mcpi.identity.did}`);
       });
     };
 
@@ -497,7 +455,7 @@ IMPORTANT: Do not call this tool more than 3 times per question.`,
     await server.connect(transport);
 
     console.error(`Context7 MCP Server v${SERVER_VERSION} + MCP-I running on stdio`);
-    console.error(`[mcpi] Server DID: ${did}`);
+    console.error(`[mcpi] Server DID: ${mcpi.identity.did}`);
   }
 }
 
