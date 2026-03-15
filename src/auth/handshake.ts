@@ -118,7 +118,10 @@ export class MemoryResumeTokenStore implements ResumeTokenStore {
     scopes: string[],
     metadata?: Record<string, unknown>
   ): Promise<string> {
-    const token = `rt_${Date.now()}_${Math.random().toString(36).substring(2, 18)}`;
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    const token = `rt_${hex}`;
     const now = Date.now();
 
     this.tokens.set(token, {

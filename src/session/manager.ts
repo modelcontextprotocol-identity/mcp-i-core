@@ -24,6 +24,8 @@ export interface SessionConfig {
   absoluteSessionLifetime?: number;
   nonceCache?: NonceCache;
   serverDid?: string;
+  /** Maximum number of concurrent sessions. Oldest sessions are evicted when exceeded. Default: 10000 */
+  maxSessions?: number;
 }
 
 export interface HandshakeResult {
@@ -37,15 +39,18 @@ export interface HandshakeResult {
 }
 
 export class SessionManager {
-  private config: Required<Omit<SessionConfig, 'absoluteSessionLifetime' | 'serverDid'>> & {
+  private config: Required<Omit<SessionConfig, 'absoluteSessionLifetime' | 'serverDid' | 'maxSessions'>> & {
     absoluteSessionLifetime?: number;
     serverDid?: string;
   };
   private cryptoProvider: CryptoProvider;
   private sessions = new Map<string, SessionContext>();
+  private sessionInsertionOrder: string[] = [];
+  private maxSessions: number;
 
   constructor(cryptoProvider: CryptoProvider, config: SessionConfig = {}) {
     this.cryptoProvider = cryptoProvider;
+    this.maxSessions = config.maxSessions ?? 10_000;
     this.config = {
       timestampSkewSeconds: config.timestampSkewSeconds ?? 120,
       sessionTtlMinutes: config.sessionTtlMinutes ?? 30,
@@ -146,7 +151,9 @@ export class SessionManager {
         ...(clientInfo && { clientInfo }),
       };
 
+      this.evictIfNeeded();
       this.sessions.set(sessionId, session);
+      this.sessionInsertionOrder.push(sessionId);
 
       return { success: true, session };
     } catch (error) {
@@ -262,6 +269,15 @@ export class SessionManager {
       .replace(/=/g, '');
   }
 
+  private evictIfNeeded(): void {
+    while (this.sessions.size >= this.maxSessions && this.sessionInsertionOrder.length > 0) {
+      const oldest = this.sessionInsertionOrder.shift();
+      if (oldest) {
+        this.sessions.delete(oldest);
+      }
+    }
+  }
+
   async cleanup(): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
 
@@ -280,6 +296,10 @@ export class SessionManager {
         this.sessions.delete(sessionId);
       }
     }
+
+    this.sessionInsertionOrder = this.sessionInsertionOrder.filter(
+      id => this.sessions.has(id)
+    );
 
     await this.config.nonceCache.cleanup();
   }
@@ -306,6 +326,7 @@ export class SessionManager {
 
   clearSessions(): void {
     this.sessions.clear();
+    this.sessionInsertionOrder = [];
   }
 }
 
