@@ -125,8 +125,8 @@ export async function withMCPI(
 
   if (proofAllTools) {
     const lowLevel = server.server;
-    const handlers: Map<string, Function> =
-      lowLevel._requestHandlers;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+    const handlers: Map<string, Function> = lowLevel._requestHandlers;
     const original = handlers.get("tools/call");
 
     if (original) {
