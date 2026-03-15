@@ -4,7 +4,7 @@
  * Centralized utilities for DID validation, normalization, and handling.
  * Promotes DRY principle and consistency across the codebase.
  *
- * @package @mcpi/core/utils
+ * @package @mcp-i/core/utils
  */
 
 import { base58Encode } from "./base58.js";

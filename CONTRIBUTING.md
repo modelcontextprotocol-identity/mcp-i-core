@@ -1,6 +1,6 @@
-# Contributing to @mcpi/core
+# Contributing to @mcp-i/core
 
-Thank you for your interest in contributing to `@mcpi/core` — the MCP-I protocol reference implementation submitted to the [DIF Trust and Authorization for AI Agents Working Group (TAAWG)](https://identity.foundation/working-groups/agent-and-authorization.html).
+Thank you for your interest in contributing to `@mcp-i/core` — the MCP-I protocol reference implementation submitted to the [DIF Trust and Authorization for AI Agents Working Group (TAAWG)](https://identity.foundation/working-groups/agent-and-authorization.html).
 
 All contributions are welcome: bug fixes, protocol clarifications, new examples, test improvements, and documentation.
 

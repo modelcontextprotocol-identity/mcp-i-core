@@ -1,5 +1,5 @@
 /**
- * @mcpi/core — MCP-I Protocol Reference Implementation
+ * @mcp-i/core — MCP-I Protocol Reference Implementation
  *
  * Delegation, proof, and session for Model Context Protocol Identity.
  * This package is a DIF TAAWG protocol reference implementation.
@@ -236,6 +236,8 @@ export {
   MemoryIdentityProvider,
 } from './providers/memory.js';
 
+export { NodeCryptoProvider } from './providers/node-crypto.js';
+
 // Middleware
 export {
   createMCPIMiddleware,
@@ -246,6 +248,9 @@ export {
   type MCPIToolDefinition,
   type MCPIToolHandler,
   type MCPIServer,
+  withMCPI,
+  generateIdentity,
+  type WithMCPIOptions,
 } from './middleware/index.js';
 
 // Logging

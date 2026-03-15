@@ -1,6 +1,6 @@
 {
-  "name": "@mcpi/core",
-  "version": "1.0.0",
+  "name": "@mcp-i/core",
+  "version": "1.1.0-canary.2",
   "description": "MCP-I protocol reference implementation — delegation, proof, and session for Model Context Protocol Identity",
   "license": "MIT",
   "type": "module",
@@ -62,6 +62,7 @@
     "example:inspector": "npx @modelcontextprotocol/inspector npx tsx examples/node-server/server.ts --stdio"
   },
   "dependencies": {
+    "@mcp-i/core": "^1.1.0-canary.2",
     "jose": "^5.6.3",
     "json-canonicalize": "^2.0.0"
   },
@@ -76,14 +77,18 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.14.9",
     "@typescript-eslint/eslint-plugin": "^8.57.0",
     "@typescript-eslint/parser": "^8.57.0",
     "@vitest/coverage-v8": "^2.0.0",
+    "commander": "^14.0.3",
     "eslint": "^10.0.3",
+    "express": "^5.2.1",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.57.0",
-    "vitest": "^2.0.0"
+    "vitest": "^2.0.0",
+    "zod": "^4.3.6"
   },
   "keywords": [
     "mcp-i",

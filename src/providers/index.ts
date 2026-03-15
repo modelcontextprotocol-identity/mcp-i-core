@@ -13,3 +13,5 @@ export {
   MemoryNonceCacheProvider,
   MemoryIdentityProvider,
 } from './memory.js';
+
+export { NodeCryptoProvider } from './node-crypto.js';

@@ -1,5 +1,5 @@
 /**
- * Session Manager Tests — @mcpi/core
+ * Session Manager Tests — @mcp-i/core
  *
  * Verifies platform-agnostic SessionManager behaviour:
  * - Nonce format identical to existing implementation

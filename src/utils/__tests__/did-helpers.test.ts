@@ -1,7 +1,7 @@
 /**
  * Tests for DID Helper Utilities
  *
- * @package @mcpi/core/utils/__tests__
+ * @package @mcp-i/core/utils/__tests__
  */
 
 import { describe, it, expect } from "vitest";

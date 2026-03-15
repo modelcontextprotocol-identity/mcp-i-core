@@ -1,6 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
- * MCP-I Example Server
+ * MCP-I Example Server (Low-Level Server API)
+ *
+ * This example uses the low-level `Server` API with `createMCPIMiddleware`
+ * for manual request handler patterns. For most servers, prefer the
+ * simpler `withMCPI()` adapter — see examples/context7-with-mcpi/ for
+ * a 2-line integration with the high-level `McpServer` API.
  *
  * Demonstrates the MCP-I protocol:
  *   1. greet           — open tool with signed proof (via _meta)
