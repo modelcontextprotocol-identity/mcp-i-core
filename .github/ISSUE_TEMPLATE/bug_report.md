@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in @mcpi/core
+about: Report a bug in @mcp-i/core
 labels: bug
 ---
 
@@ -13,7 +13,7 @@ labels: bug
 **Expected behavior**
 
 
-**Environment** (Node version, OS, @mcpi/core version)
+**Environment** (Node version, OS, @mcp-i/core version)
 
 
 **Additional context**

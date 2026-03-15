@@ -8,15 +8,9 @@
     "noUncheckedIndexedAccess": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
-    "outDir": "./dist",
-    "rootDir": "../../",
-    "declaration": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "noEmit": true
   },
-  "include": [
-    "src/**/*",
-    "../../src/**/*",
-    "../node-server/node-crypto.ts"
-  ],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
 }

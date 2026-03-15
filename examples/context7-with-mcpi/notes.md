@@ -26,7 +26,7 @@ server.registerTool('my-tool', { ... }, async (args) => handler(args as Record<s
 ### After (A+ era): 2 lines — register tools normally, proofs attached automatically
 
 ```typescript
-import { withMCPI } from '@mcpi/core/middleware';
+import { withMCPI } from '@mcp-i/core/middleware';
 const mcpi = await withMCPI(server, { crypto: new NodeCryptoProvider() });
 
 // Register tools normally — proofs attached automatically
@@ -73,7 +73,7 @@ All 5 friction points from the original audit have been addressed:
 ### `withMCPI(server, options)`
 
 ```typescript
-import { withMCPI } from '@mcpi/core/middleware';
+import { withMCPI } from '@mcp-i/core/middleware';
 
 const mcpi = await withMCPI(server, {
   crypto: new NodeCryptoProvider(),   // required — platform-specific
@@ -94,7 +94,7 @@ const handler = mcpi.wrapWithDelegation('admin-tool', { ... }, async (args) => {
 ### `generateIdentity(crypto)`
 
 ```typescript
-import { generateIdentity } from '@mcpi/core/middleware';
+import { generateIdentity } from '@mcp-i/core/middleware';
 
 const identity = await generateIdentity(new NodeCryptoProvider());
 // { did: 'did:key:z6Mk...', kid: 'did:key:z6Mk...#keys-1', privateKey: '...', publicKey: '...' }
@@ -133,3 +133,25 @@ Net change: **-37 lines**. The integration is now smaller than the original tool
 **Remaining considerations:**
 - `crypto` is still an explicit import — this is intentional (platform-agnostic design)
 - The `tools/call` interception accesses SDK internals (`_requestHandlers`) — this is version-locked via peer dependency
+
+---
+
+## Next Steps
+
+### 1. Persistent Identity (High Priority)
+
+Currently `withMCPI()` generates an ephemeral Ed25519 keypair on every startup. This means:
+- The server DID changes on every restart/deploy
+- Clients can't verify continuity across deploys
+- Proofs from previous sessions can't be traced back to the same server
+
+Servers that create multiple `McpServer` instances per-session (like the Brave Search example's HTTP transport) hit this even harder — a new DID per request unless you manually `generateIdentity()` once and pass it via the `identity` option.
+
+**What's needed:**
+- `withMCPI(server, { crypto, identity: 'file:///path/to/identity.json' })` — load from file
+- `withMCPI(server, { crypto, identity: 'env:MCPI_IDENTITY' })` — load from env var (base64-encoded JSON)
+- KMS-backed identity provider for production (AWS KMS, GCP KMS, Vault)
+- `generateIdentity()` should optionally persist to a file for dev convenience
+- On first run: generate + save. On subsequent runs: load existing.
+
+This is the single biggest gap between "demo-ready" and "production-ready".

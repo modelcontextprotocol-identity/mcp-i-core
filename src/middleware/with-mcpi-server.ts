@@ -5,7 +5,7 @@
  * standard McpServer instance with a single function call.
  *
  * Usage:
- *   import { withMCPI } from '@mcpi/core/middleware';
+ *   import { withMCPI } from '@mcp-i/core/middleware';
  *   const mcpi = await withMCPI(server, { crypto: new NodeCryptoProvider() });
  *   // All tools registered on `server` now get proofs automatically.
  */

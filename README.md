@@ -1,4 +1,4 @@
-# @mcpi/core
+# @mcp-i/core
 
 **MCP-I protocol reference implementation** — delegation, proof, and session for the Model Context Protocol Identity (MCP-I) standard.
 
@@ -48,7 +48,7 @@ For outbound delegation propagation (forwarding delegation context to downstream
 ## Installation
 
 ```bash
-npm install @mcpi/core
+npm install @mcp-i/core
 ```
 
 ---
@@ -97,7 +97,7 @@ import {
   DelegationCredentialIssuer,
   type DelegationIdentityProvider,
   type VCSigningFunction,
-} from '@mcpi/core';
+} from '@mcp-i/core';
 
 // Minimal Node.js CryptoProvider backed by node:crypto
 class NodeCryptoProvider extends CryptoProvider {
@@ -188,7 +188,7 @@ import {
   SessionManager,
   MemoryNonceCacheProvider,
   createHandshakeRequest,
-} from '@mcpi/core';
+} from '@mcp-i/core';
 
 // SessionManager only needs randomBytes() for session ID generation
 class NodeCryptoProvider extends CryptoProvider {
@@ -245,7 +245,7 @@ import {
   MemoryIdentityProvider,
   ProofGenerator,
   SessionManager,
-} from '@mcpi/core';
+} from '@mcp-i/core';
 
 class NodeCryptoProvider extends CryptoProvider {
   async generateKeyPair() {
@@ -320,7 +320,7 @@ The recommended way to add MCP-I to any `McpServer`-based server:
 ```typescript
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { withMCPI, CryptoProvider } from '@mcpi/core';
+import { withMCPI, CryptoProvider } from '@mcp-i/core';
 import { z } from 'zod';
 
 // ... (NodeCryptoProvider as above)
@@ -348,7 +348,7 @@ For the low-level `Server` API with manual request handlers, use `createMCPIMidd
 ```typescript
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { createMCPIMiddleware, generateIdentity } from '@mcpi/core';
+import { createMCPIMiddleware, generateIdentity } from '@mcp-i/core';
 
 const crypto = new NodeCryptoProvider();
 const identity = await generateIdentity(crypto);
@@ -381,7 +381,7 @@ await server.connect(new StdioServerTransport());
 ## Example 5 — Verify a Proof with DID:key Resolution
 
 ```typescript
-import { ProofVerifier, createDidKeyResolver, CryptoProvider } from '@mcpi/core';
+import { ProofVerifier, createDidKeyResolver, CryptoProvider } from '@mcp-i/core';
 
 // ... (NodeCryptoProvider with verify + hash)
 

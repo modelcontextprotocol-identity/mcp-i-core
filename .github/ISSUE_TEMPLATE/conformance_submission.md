@@ -1,6 +1,6 @@
 ---
 name: Conformance Submission
-about: Submit conformance test results for a @mcpi/core implementation
+about: Submit conformance test results for a @mcp-i/core implementation
 labels: conformance
 ---
 

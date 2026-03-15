@@ -1,5 +1,5 @@
 /**
- * Proof Generator Tests — @mcpi/core
+ * Proof Generator Tests — @mcp-i/core
  *
  * Ported from packages/mcp-i-core/src/proof/__tests__/proof-generator.test.ts.
  * All test logic is identical — only import paths change.

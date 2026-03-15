@@ -86,7 +86,7 @@ The demo:
 import {
   buildOutboundDelegationHeaders,
   CryptoProvider,
-} from '@mcpi/core';
+} from '@mcp-i/core';
 
 // When making an outbound request on behalf of an agent...
 const headers = await buildOutboundDelegationHeaders({

@@ -7,7 +7,7 @@
  * `./with-mcpi-server.ts` which auto-registers the handshake tool and
  * auto-attaches proofs to all tool responses:
  *
- *   import { withMCPI } from '@mcpi/core';
+ *   import { withMCPI } from '@mcp-i/core';
  *   await withMCPI(server, { crypto: new NodeCryptoProvider() });
  *
  * `createMCPIMiddleware()` in this file is the lower-level API used
@@ -415,12 +415,12 @@ export function createMCPIMiddleware(
     return undefined;
   }
 
-  function wrapWithProof(
+  function wrapWithProof<T extends Record<string, unknown> = Record<string, unknown>>(
     toolName: string,
-    handler: MCPIToolHandler,
+    handler: MCPIToolHandler<T>,
   ): MCPIToolHandler {
     return async (args: Record<string, unknown>, sessionId?: string) => {
-      const result = await handler(args, sessionId);
+      const result = await handler(args as T, sessionId);
 
       if (result.isError) {
         return result;
