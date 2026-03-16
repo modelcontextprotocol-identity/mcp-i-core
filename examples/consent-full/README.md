@@ -22,6 +22,23 @@ npx @modelcontextprotocol/inspector
 3. Approve — delegation issued, stored via resume_token
 4. Retry `checkout` — delegation auto-applied, tool executes
 
+## Architecture
+
+This example runs **two servers**:
+
+| Server | Port | Purpose |
+|--------|------|---------|
+| MCP server (`server.ts`) | 3002 | Hosts tools, verifies delegations, attaches proofs |
+| Consent server (`consent-server.ts`) | 3001 | Renders consent UI via `@kya-os/consent`, issues VCs |
+
+**`consent-server.ts` is the showcase** — it demonstrates `@kya-os/consent`'s template system, auth modes, and branding. `server.ts` is MCP infrastructure, identical in structure to consent-basic.
+
+### Why the low-level Server API?
+
+This example uses `createMCPIMiddleware` with the SDK's low-level `Server` class instead of the 2-line `withMCPI(server, { crypto })` pattern ([see context7-with-mcpi](../context7-with-mcpi/) for that). The reason: delegation-protected tools receive `_mcpi_delegation` as a tool argument. `McpServer.registerTool` validates args against zod schemas and strips unknown keys — so the delegation VC is silently dropped before the handler sees it. The low-level `Server` API passes args through without schema validation, which delegation requires.
+
+If your server doesn't need delegation (just proofs + handshake), use `withMCPI` — it's 2 lines.
+
 ## What's Different from consent-basic?
 
 | | consent-basic | consent-full |
@@ -59,8 +76,8 @@ The consent page shows a username/password form. Demo credentials: `demo` / `dem
 
 | File | Purpose |
 |------|---------|
-| `src/server.ts` | MCP server with browse/checkout tools, SSE + HTTP transports |
-| `src/consent-server.ts` | Consent page via `@kya-os/consent`, VC issuance on approval |
+| `src/consent-server.ts` | **The showcase** — consent page via `@kya-os/consent`, VC issuance |
+| `src/server.ts` | MCP server infrastructure — tools, delegation, transports |
 | `src/delegation-issuer.ts` | DelegationCredentialIssuer factory |
 | `scripts/generate-identity.ts` | Persistent Ed25519 DID identity |
 

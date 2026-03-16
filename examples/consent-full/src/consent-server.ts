@@ -2,9 +2,9 @@
 /**
  * Consent HTTP Server (powered by @kya-os/consent)
  *
- * Serves a consent page rendered by @kya-os/consent and issues W3C Delegation
- * Credentials on approval. Replaces hand-rolled HTML with a single
- * generateConsentShell() call — multi-mode auth, loading skeleton, and no-JS
+ * This is the core differentiator from consent-basic. It replaces 200+ lines
+ * of hand-rolled HTML with a single generateConsentShell() call from
+ * @kya-os/consent — multi-mode auth, loading skeleton, branding, and no-JS
  * fallback included.
  *
  * Routes:

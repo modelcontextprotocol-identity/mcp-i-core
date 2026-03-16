@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createMCPIMiddleware, type MCPIMiddleware } from '../../../src/middleware/with-mcpi.js';
+import { createMCPIMiddleware, type MCPIMiddleware } from '../../../src/middleware/index.js';
 import { NodeCryptoProvider } from '../../../src/providers/node-crypto.js';
 import { generateDidKeyFromBase64 } from '../../../src/utils/did-helpers.js';
 import { createDelegationIssuerFromIdentity } from '../src/delegation-issuer.js';

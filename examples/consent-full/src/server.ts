@@ -1,15 +1,24 @@
 #!/usr/bin/env npx tsx
 /**
- * MCP Server with Full Consent Flow (powered by @kya-os/consent)
+ * MCP Server with Consent-Based Delegation
  *
- * Same protocol flow as consent-basic — browse (public) and checkout (protected)
- * tools — but the consent page is rendered by @kya-os/consent with multi-mode
- * auth, configurable branding, loading skeleton, and no-JS fallback.
+ * Demonstrates two tools:
+ *   - browse   (public)    — executes freely, proof attached
+ *   - checkout (protected) — requires a W3C Delegation Credential with scope cart:write
  *
- * Transports (selected via --transport flag):
- *   - stdio (default) — for MCP Inspector CLI integration
- *   - sse             — legacy SSE transport on /sse + /messages
- *   - mcp             — Streamable HTTP transport on /mcp (recommended for HTTP)
+ * The consent UI is served by consent-server.ts (the @kya-os/consent showcase).
+ * This file is MCP server infrastructure — identical in structure to consent-basic.
+ *
+ * Architecture note:
+ *   This example uses the low-level SDK `Server` API with `createMCPIMiddleware`
+ *   instead of the 2-line `withMCPI(server, { crypto })` pattern (see examples/
+ *   context7-with-mcpi for that). The reason: delegation-protected tools receive
+ *   `_mcpi_delegation` as a tool argument. McpServer.registerTool validates args
+ *   against zod schemas and strips unknown keys — so the delegation VC would be
+ *   silently dropped before the handler sees it. The low-level Server API passes
+ *   args through without schema validation, which delegation requires.
+ *
+ * Transports: stdio (default), sse, mcp (Streamable HTTP)
  *
  * Related Spec: MCP-I §4 (Delegation), §5 (Proof), §6 (Authorization)
  */
@@ -26,14 +35,22 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { createMCPIMiddleware, type MCPIMiddleware } from '../../../src/middleware/with-mcpi.js';
+import {
+  createMCPIMiddleware,
+  generateIdentity,
+  type MCPIMiddleware,
+  type MCPIIdentityConfig,
+} from '../../../src/middleware/index.js';
 import { NodeCryptoProvider } from '../../../src/providers/node-crypto.js';
-import { generateDidKeyFromBase64 } from '../../../src/utils/did-helpers.js';
 import { startConsentServer } from './consent-server.js';
 import { createDelegationIssuerFromIdentity } from './delegation-issuer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IDENTITY_PATH = path.resolve(__dirname, '..', '.mcpi', 'identity.json');
+
+// ── Application-Level Types ─────────────────────────────────────────
+// These are example-specific patterns for the resume_token consent flow,
+// not part of the MCP-I protocol itself.
 
 export interface ServerConfig {
   consentUrl: string;
@@ -151,6 +168,11 @@ export interface ToolResult {
   [key: string]: unknown;
 }
 
+// ── MCP Server Factory ──────────────────────────────────────────────
+// Protocol integration: createMCPIMiddleware provides wrapWithProof (§5)
+// and wrapWithDelegation (§4). We use the low-level Server API because
+// delegation requires raw args — see architecture note at top of file.
+
 export function createConsentFullMcpServer(
   mcpi: MCPIMiddleware,
   config: ServerConfig,
@@ -160,7 +182,7 @@ export function createConsentFullMcpServer(
     { capabilities: { tools: {} } },
   );
 
-  // browse: public tool — proof attached via wrapWithProof
+  // browse: public tool — §5 proof attached via wrapWithProof
   const browseHandler = mcpi.wrapWithProof('browse', async (args) => ({
     content: [{
       type: 'text',
@@ -168,7 +190,8 @@ export function createConsentFullMcpServer(
     }],
   }));
 
-  // checkout: protected tool — requires delegation with scope cart:write
+  // checkout: protected tool — §4 delegation with scope cart:write
+  // wrapWithDelegation checks _mcpi_delegation in args (why we need raw args)
   const rawCheckoutHandler = mcpi.wrapWithDelegation(
     'checkout',
     { scopeId: 'cart:write', consentUrl: config.consentUrl },
@@ -237,44 +260,32 @@ export function createConsentFullMcpServer(
   return server;
 }
 
+// ── Identity + Middleware Setup ──────────────────────────────────────
+
 /**
- * Load identity from .mcpi/identity.json if it exists,
- * otherwise generate an ephemeral one.
+ * Load identity from .mcpi/identity.json or generate an ephemeral one,
+ * then create MCP-I middleware with session + proof + delegation support.
  */
 export async function createMcpiMiddleware() {
   const crypto = new NodeCryptoProvider();
-  let did: string;
-  let kid: string;
-  let privateKey: string;
-  let publicKey: string;
 
+  let identity: MCPIIdentityConfig;
   if (fs.existsSync(IDENTITY_PATH)) {
-    const stored = JSON.parse(fs.readFileSync(IDENTITY_PATH, 'utf-8')) as {
-      did: string; kid: string; privateKey: string; publicKey: string;
-    };
-    did = stored.did;
-    kid = stored.kid;
-    privateKey = stored.privateKey;
-    publicKey = stored.publicKey;
+    identity = JSON.parse(fs.readFileSync(IDENTITY_PATH, 'utf-8')) as MCPIIdentityConfig;
     process.stderr.write(`[server] Loaded identity from ${IDENTITY_PATH}\n`);
   } else {
-    const keyPair = await crypto.generateKeyPair();
-    did = generateDidKeyFromBase64(keyPair.publicKey);
-    kid = `${did}#keys-1`;
-    privateKey = keyPair.privateKey;
-    publicKey = keyPair.publicKey;
+    identity = await generateIdentity(crypto);
     process.stderr.write(`[server] Generated ephemeral identity (run 'npm run generate-identity' to persist)\n`);
   }
 
   return createMCPIMiddleware(
-    {
-      identity: { did, kid, privateKey, publicKey },
-      session: { sessionTtlMinutes: 60 },
-      autoSession: true,
-    },
+    { identity, session: { sessionTtlMinutes: 60 }, autoSession: true },
     crypto,
   );
 }
+
+// ── HTTP Transport Boilerplate ───────────────────────────────────────
+// Standard MCP transport setup — not specific to consent or delegation.
 
 function setCorsHeaders(res: http.ServerResponse) {
   // EXAMPLE ONLY — restrict to your application origin in production
@@ -284,9 +295,7 @@ function setCorsHeaders(res: http.ServerResponse) {
   res.setHeader('Access-Control-Expose-Headers', 'MCP-Session-Id');
 }
 
-/**
- * Start the MCP server with SSE + Streamable HTTP transports.
- */
+/** Start the MCP server with SSE + Streamable HTTP transports. */
 async function startHttpServer(mcpi: MCPIMiddleware, consentUrl: string, port: number, delegationStore?: DelegationStore) {
   let sseTransport: SSEServerTransport | null = null;
 
@@ -359,7 +368,8 @@ async function startHttpServer(mcpi: MCPIMiddleware, consentUrl: string, port: n
   });
 }
 
-// Run standalone
+// ── Entrypoint ──────────────────────────────────────────────────────
+
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const transport = process.argv.includes('--stdio') ? 'stdio'

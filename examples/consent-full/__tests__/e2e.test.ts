@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createMCPIMiddleware, type MCPIMiddleware } from '../../../src/middleware/with-mcpi.js';
+import { createMCPIMiddleware, type MCPIMiddleware } from '../../../src/middleware/index.js';
 import { NodeCryptoProvider } from '../../../src/providers/node-crypto.js';
 import { generateDidKeyFromBase64 } from '../../../src/utils/did-helpers.js';
 import { startConsentServer, type ConsentServer } from '../src/consent-server.js';

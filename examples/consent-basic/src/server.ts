@@ -6,10 +6,16 @@
  *   - browse   (public)    — executes without delegation, proof attached
  *   - checkout (protected) — requires a W3C Delegation Credential with scope cart:write
  *
- * Transports (selected via --transport flag):
- *   - stdio (default) — for MCP Inspector CLI integration
- *   - sse             — legacy SSE transport on /sse + /messages
- *   - mcp             — Streamable HTTP transport on /mcp (recommended for HTTP)
+ * Architecture note:
+ *   This example uses the low-level SDK `Server` API with `createMCPIMiddleware`
+ *   instead of the 2-line `withMCPI(server, { crypto })` pattern (see examples/
+ *   context7-with-mcpi for that). The reason: delegation-protected tools receive
+ *   `_mcpi_delegation` as a tool argument. McpServer.registerTool validates args
+ *   against zod schemas and strips unknown keys — so the delegation VC would be
+ *   silently dropped before the handler sees it. The low-level Server API passes
+ *   args through without schema validation, which delegation requires.
+ *
+ * Transports: stdio (default), sse, mcp (Streamable HTTP)
  *
  * Related Spec: MCP-I §4 (Delegation), §5 (Proof), §6 (Authorization)
  */
