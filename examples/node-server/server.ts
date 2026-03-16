@@ -64,6 +64,7 @@ function createMcpServer(mcpi: ReturnType<typeof createMCPIMiddleware>) {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
+      mcpi.mcpiTool,
       {
         name: 'greet',
         description: 'Returns a greeting with a signed Ed25519 proof',
@@ -94,9 +95,9 @@ function createMcpServer(mcpi: ReturnType<typeof createMCPIMiddleware>) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
 
-    // ── Handshake (still available for MCP-I-aware clients) ─────
-    if (name === '_mcpi_handshake') {
-      return mcpi.handleHandshake(args as Record<string, unknown>);
+    // ── MCP-I protocol operations ────────────────────────────────
+    if (name === '_mcpi') {
+      return mcpi.handleMCPI(args as Record<string, unknown>);
     }
 
     // ── Open tools ──────────────────────────────────────────────

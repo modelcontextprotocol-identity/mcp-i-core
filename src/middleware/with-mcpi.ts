@@ -4,8 +4,8 @@
  * Adds identity, session management, and proof generation to MCP servers.
  *
  * For most use cases, prefer the high-level `withMCPI()` adapter from
- * `./with-mcpi-server.ts` which auto-registers the handshake tool and
- * auto-attaches proofs to all tool responses:
+ * `./with-mcpi-server.ts` which (by default) auto-registers the handshake
+ * tool and auto-attaches proofs to all tool responses:
  *
  *   import { withMCPI } from '@mcp-i/core';
  *   await withMCPI(server, { crypto: new NodeCryptoProvider() });
@@ -55,7 +55,11 @@ export interface MCPIIdentityConfig {
   kid: string;
   privateKey: string;
   publicKey: string;
+  agentName?: string;
 }
+
+export const MCPI_ACTIONS = ["handshake", "identity", "reputation"] as const;
+type MCPIAction = (typeof MCPI_ACTIONS)[number];
 
 export interface MCPIDelegationConfig {
   /**
@@ -103,8 +107,8 @@ export interface MCPIConfig {
   /**
    * When true, automatically creates a session on the first tool call
    * if no session exists. Useful for demos and development where
-   * MCP clients don't support the _mcpi_handshake flow.
-   * In production, MCP-I-aware clients handle handshake automatically.
+   * MCP clients don't support the `_mcpi` handshake flow.
+   * In production, MCP-I-aware runtimes should execute handshake before tool calls.
    */
   autoSession?: boolean;
 }
@@ -155,12 +159,29 @@ export interface MCPIMiddleware {
   proofGenerator: ProofGenerator;
 
   /**
+   * Unified tool definition for `_mcpi`.
+   * Include this in your ListToolsRequest handler's tool list.
+   */
+  mcpiTool: MCPIToolDefinition;
+
+  /**
+   * @deprecated Use `mcpiTool` (`_mcpi` with `action: "handshake"`).
    * Tool definition for `_mcpi_handshake`.
    * Include this in your ListToolsRequest handler's tool list.
    */
   handshakeTool: MCPIToolDefinition;
 
   /**
+   * Handle a unified `_mcpi` action. Use this in your CallToolRequest handler
+   * when `request.params.name === '_mcpi'`.
+   */
+  handleMCPI(args: Record<string, unknown>): Promise<{
+    content: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  }>;
+
+  /**
+   * @deprecated Use `handleMCPI` with `action: "handshake"`.
    * Handle a handshake call. Use this in your CallToolRequest handler
    * when `request.params.name === '_mcpi_handshake'`.
    */
@@ -267,7 +288,8 @@ function validateScopeAttenuation(
  * Create MCP-I middleware for a standard MCP SDK Server.
  *
  * For most use cases, prefer {@link withMCPI} from `./with-mcpi-server.ts`
- * which wraps this function and auto-registers handshake + auto-attaches proofs.
+ * which wraps this function and (by default) auto-registers handshake +
+ * auto-attaches proofs.
  *
  * Use `createMCPIMiddleware` directly when:
  * - You use the low-level `Server` API (not `McpServer`)
@@ -331,6 +353,33 @@ export function createMCPIMiddleware(
     },
   };
 
+  const mcpiTool: MCPIToolDefinition = {
+    name: "_mcpi",
+    description:
+      "MCP-I protocol — identity verification, session handshake, and server metadata",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [...MCPI_ACTIONS],
+          description: "Protocol operation to perform",
+        },
+        nonce: { type: "string", description: "Client-generated unique nonce" },
+        audience: {
+          type: "string",
+          description: "Intended audience (server DID or URL)",
+        },
+        timestamp: { type: "number", description: "Unix epoch seconds" },
+        agentDid: {
+          type: "string",
+          description: "Client agent DID (optional)",
+        },
+      },
+      required: ["action"],
+    },
+  };
+
   async function handleHandshake(args: Record<string, unknown>): Promise<{
     content: Array<{ type: string; text: string }>;
     isError?: boolean;
@@ -381,9 +430,82 @@ export function createMCPIMiddleware(
     };
   }
 
+  async function handleIdentity(): Promise<{
+    content: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  }> {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            did: identity.did,
+            kid: identity.kid,
+            name: config.identity.agentName ?? identity.did,
+            capabilities: ["handshake", "signing", "verification"],
+            protocolVersion: "1.0.0",
+          }),
+        },
+      ],
+    };
+  }
+
+  async function handleMCPI(args: Record<string, unknown>): Promise<{
+    content: Array<{ type: string; text: string }>;
+    isError?: boolean;
+  }> {
+    const action =
+      typeof args.action === "string"
+        ? (args.action as MCPIAction)
+        : undefined;
+
+    switch (action) {
+      case "handshake":
+        return handleHandshake(args);
+
+      case "identity":
+        return handleIdentity();
+
+      case "reputation":
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: {
+                  code: "XMCP_I_ENOT_IMPLEMENTED",
+                  message:
+                    'action: "reputation" is not yet implemented.',
+                },
+              }),
+            },
+          ],
+          isError: true,
+        };
+
+      default:
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: {
+                  code: "XMCP_I_EUNKNOWN_ACTION",
+                  message: `Unknown _mcpi action: "${action ?? "(missing)"}". Valid actions: ${MCPI_ACTIONS.join(", ")}`,
+                },
+              }),
+            },
+          ],
+          isError: true,
+        };
+    }
+  }
+
   /**
    * Auto-create a session for proof generation when no handshake has occurred.
-   * In production, MCP-I-aware clients handle the handshake automatically.
+   * In production, MCP-I-aware runtimes should execute handshake before tool calls.
    * This convenience mode allows non-MCP-I clients (like MCP Inspector) to
    * still see proofs without manual handshake.
    */
@@ -780,7 +902,9 @@ export function createMCPIMiddleware(
     identity: config.identity,
     sessionManager,
     proofGenerator,
+    mcpiTool,
     handshakeTool,
+    handleMCPI,
     handleHandshake,
     wrapWithProof,
     wrapWithDelegation,

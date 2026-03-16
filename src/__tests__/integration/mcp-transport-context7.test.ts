@@ -43,18 +43,19 @@ async function setupMcpServerPair(options?: { autoSession?: boolean }) {
     { instructions: 'Test server for McpServer + MCP-I integration' },
   );
 
-  // Register _mcpi_handshake tool (same pattern as Context7 integration)
+  // Register unified _mcpi tool (same pattern as Context7 integration)
   server.registerTool(
-    '_mcpi_handshake',
+    '_mcpi',
     {
-      description: 'MCP-I identity handshake',
+      description: 'MCP-I protocol',
       inputSchema: {
-        nonce: z.string(),
-        audience: z.string(),
-        timestamp: z.number(),
+        action: z.enum(['handshake', 'identity', 'reputation']),
+        nonce: z.string().optional(),
+        audience: z.string().optional(),
+        timestamp: z.number().optional(),
       },
     },
-    async (args) => mcpi.handleHandshake(args as Record<string, unknown>),
+    async (args) => mcpi.handleMCPI(args as Record<string, unknown>),
   );
 
   // Wrap a test tool with proof (simulates Context7's resolve-library-id)
@@ -135,13 +136,13 @@ describe('McpServer (High-Level API) + MCP-I Integration', () => {
     return pair;
   }
 
-  it('listTools returns handshake + registered tools', async () => {
+  it('listTools returns _mcpi + registered tools', async () => {
     const { client } = await createPair();
 
     const result = await client.listTools();
     const toolNames = result.tools.map((t) => t.name);
 
-    expect(toolNames).toContain('_mcpi_handshake');
+    expect(toolNames).toContain('_mcpi');
     expect(toolNames).toContain('search');
     expect(toolNames).toContain('fetch-docs');
   });
@@ -150,8 +151,9 @@ describe('McpServer (High-Level API) + MCP-I Integration', () => {
     const { client, did } = await createPair();
 
     const result = await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `mcpserver-test-${Date.now()}`,
         audience: did,
         timestamp: Math.floor(Date.now() / 1000),
@@ -173,8 +175,9 @@ describe('McpServer (High-Level API) + MCP-I Integration', () => {
 
     // Handshake first
     await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `mcpserver-test-${Date.now()}`,
         audience: did,
         timestamp: Math.floor(Date.now() / 1000),
@@ -337,13 +340,13 @@ describe('McpServer + withMCPI() (Dream API)', () => {
     return { client, server, mcpi };
   }
 
-  it('listTools returns handshake + registered tools (withMCPI)', async () => {
+  it('listTools returns _mcpi + registered tools (withMCPI)', async () => {
     const { client } = await createWithMCPIPair();
 
     const result = await client.listTools();
     const toolNames = result.tools.map((t) => t.name);
 
-    expect(toolNames).toContain('_mcpi_handshake');
+    expect(toolNames).toContain('_mcpi');
     expect(toolNames).toContain('search');
     expect(toolNames).toContain('fetch-docs');
   });
@@ -373,8 +376,9 @@ describe('McpServer + withMCPI() (Dream API)', () => {
     const { client, mcpi } = await createWithMCPIPair({ autoSession: false });
 
     const result = await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `withmcpi-test-${Date.now()}`,
         audience: mcpi.identity.did,
         timestamp: Math.floor(Date.now() / 1000),

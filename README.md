@@ -44,6 +44,29 @@ await withMCPI(server, { crypto: new NodeCryptoProvider() });
 // Register tools normally — proofs are attached automatically
 ```
 
+Default behavior is compatibility-first:
+- `withMCPI` auto-registers `_mcpi`, so it appears in MCP Inspector and tool lists.
+- Handshake is not tied to MCP `initialize`; a client/runtime must call it (or use `autoSession`).
+
+If your runtime has a native connection/auth handshake hook, disable tool exposure and call middleware directly:
+
+```typescript
+const mcpi = await withMCPI(server, {
+  crypto: new NodeCryptoProvider(),
+  handshakeExposure: 'none',
+  autoSession: false,
+});
+
+// In your runtime's connection handshake hook:
+await mcpi.handleMCPI({
+  action: 'handshake',
+  nonce: 'client-generated-nonce',
+  audience: mcpi.identity.did,
+  timestamp: Math.floor(Date.now() / 1000),
+  agentDid: 'did:key:...optional...',
+});
+```
+
 Every tool response now includes a cryptographic proof. For protected tools that require human consent, add `wrapWithDelegation`:
 
 ```typescript

@@ -2,7 +2,7 @@
  * withMCPI() Integration Tests
  *
  * Tests the dream API: `withMCPI(server, { crypto })` auto-registers
- * the handshake tool and auto-attaches proofs to all tool responses.
+ * the `_mcpi` protocol tool and auto-attaches proofs to all tool responses.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -20,6 +20,7 @@ async function createTestPair(options?: {
   excludeTools?: string[];
   autoSession?: boolean;
   registerToolsBeforeWithMCPI?: boolean;
+  handshakeExposure?: 'tool' | 'none';
 }) {
   const crypto = new NodeCryptoProvider();
   const server = new McpServer(
@@ -46,6 +47,7 @@ async function createTestPair(options?: {
     autoSession: options?.autoSession ?? true,
     proofAllTools: options?.proofAllTools,
     excludeTools: options?.excludeTools,
+    handshakeExposure: options?.handshakeExposure,
   });
 
   // Register tools AFTER withMCPI to test late registration
@@ -103,13 +105,23 @@ describe('withMCPI()', () => {
     return pair;
   }
 
-  it('auto-registers _mcpi_handshake tool', async () => {
+  it('auto-registers _mcpi tool', async () => {
     const { client } = await create();
 
     const result = await client.listTools();
     const toolNames = result.tools.map((t) => t.name);
 
-    expect(toolNames).toContain('_mcpi_handshake');
+    expect(toolNames).toContain('_mcpi');
+  });
+
+  it('handshakeExposure: none does not auto-register _mcpi', async () => {
+    const { client } = await create({ handshakeExposure: 'none' });
+
+    const result = await client.listTools();
+    const toolNames = result.tools.map((t) => t.name);
+
+    expect(toolNames).not.toContain('_mcpi');
+    expect(toolNames).toContain('greet');
   });
 
   it('auto-proofs all registered tools', async () => {
@@ -204,8 +216,9 @@ describe('withMCPI()', () => {
     const { client, mcpi } = await create({ autoSession: false });
 
     const result = await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `test-${Date.now()}`,
         audience: mcpi.identity.did,
         timestamp: Math.floor(Date.now() / 1000),
@@ -217,6 +230,36 @@ describe('withMCPI()', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.sessionId).toMatch(/^mcpi_/);
     expect(parsed.serverDid).toBe(mcpi.identity.did);
+  });
+
+  it('manual handshake API works when handshake tool is not exposed', async () => {
+    const { client, mcpi } = await create({
+      autoSession: false,
+      handshakeExposure: 'none',
+    });
+
+    await mcpi.handleHandshake({
+      nonce: `manual-${Date.now()}`,
+      audience: mcpi.identity.did,
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+
+    const result = await client.callTool({
+      name: 'greet',
+      arguments: { name: 'Manual Handshake' },
+    });
+
+    const first = result.content[0] as { type: string; text: string };
+    expect(first.text).toBe('Hello, Manual Handshake!');
+
+    expect(result._meta).toBeDefined();
+    const proof = (result._meta as Record<string, unknown>).proof as {
+      jws: string;
+      meta: Record<string, unknown>;
+    };
+    expect(proof).toBeDefined();
+    expect(proof.jws).toBeDefined();
+    expect(proof.meta.sessionId).toMatch(/^mcpi_/);
   });
 
   it('multiple tools share the same auto-session', async () => {

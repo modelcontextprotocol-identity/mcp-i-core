@@ -53,7 +53,7 @@ type ToolResult = {
 export function createMCPITransport(
   inner: Transport,
   mcpi: MCPIMiddleware,
-  exclude: string[] = ["_mcpi_handshake"],
+  exclude: string[] = ["_mcpi", "_mcpi_handshake"],
 ): Transport {
   // Request id → { toolName, args } for pending tool calls
   const pending = new Map<unknown, PendingCall>();

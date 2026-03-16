@@ -101,7 +101,7 @@ async function setupMcpPair(options?: { autoSession?: boolean }) {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
-      mcpi.handshakeTool,
+      mcpi.mcpiTool,
       {
         name: 'greet',
         description: 'Returns a greeting with proof',
@@ -127,8 +127,8 @@ async function setupMcpPair(options?: { autoSession?: boolean }) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
 
-    if (name === '_mcpi_handshake') {
-      return mcpi.handleHandshake(args as Record<string, unknown>);
+    if (name === '_mcpi') {
+      return mcpi.handleMCPI(args as Record<string, unknown>);
     }
     if (name === 'greet') {
       return greetHandler(args as Record<string, unknown>);
@@ -211,14 +211,14 @@ describe('MCP Transport Integration', () => {
     return pair;
   }
 
-  it('listTools returns handshake + app tools', async () => {
+  it('listTools returns _mcpi + app tools', async () => {
     const { client } = await createPair();
 
     const result = await client.listTools();
     const toolNames = result.tools.map((t) => t.name);
 
     expect(toolNames).toHaveLength(3);
-    expect(toolNames).toContain('_mcpi_handshake');
+    expect(toolNames).toContain('_mcpi');
     expect(toolNames).toContain('greet');
     expect(toolNames).toContain('restricted_greet');
   });
@@ -227,8 +227,9 @@ describe('MCP Transport Integration', () => {
     const { client, did } = await createPair();
 
     const result = await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `transport-test-${Date.now()}`,
         audience: did,
         timestamp: Math.floor(Date.now() / 1000),
@@ -250,8 +251,9 @@ describe('MCP Transport Integration', () => {
 
     // Handshake first
     await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `transport-test-${Date.now()}`,
         audience: did,
         timestamp: Math.floor(Date.now() / 1000),
@@ -287,8 +289,9 @@ describe('MCP Transport Integration', () => {
 
     // Handshake
     await client.callTool({
-      name: '_mcpi_handshake',
+      name: '_mcpi',
       arguments: {
+        action: 'handshake',
         nonce: `transport-test-${Date.now()}`,
         audience: did,
         timestamp: Math.floor(Date.now() / 1000),

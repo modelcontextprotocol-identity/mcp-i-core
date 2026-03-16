@@ -130,6 +130,94 @@ describe('createMCPIMiddleware', () => {
     });
   });
 
+  describe('_mcpi unified tool', () => {
+    it('should expose mcpiTool with name "_mcpi"', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      expect(mcpi.mcpiTool.name).toBe('_mcpi');
+      expect(mcpi.mcpiTool.inputSchema.properties?.action).toBeDefined();
+      expect(
+        (mcpi.mcpiTool.inputSchema.properties?.action as { enum?: string[] })?.enum,
+      ).toContain('handshake');
+      expect(
+        (mcpi.mcpiTool.inputSchema.properties?.action as { enum?: string[] })?.enum,
+      ).toContain('identity');
+      expect(mcpi.mcpiTool.inputSchema.required).toEqual(['action']);
+    });
+
+    it('should still expose handshakeTool as deprecated alias', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      expect(mcpi.handshakeTool).toBeDefined();
+      expect(mcpi.handshakeTool.name).toBe('_mcpi_handshake');
+    });
+
+    it('should dispatch action: "handshake" to handleHandshake', async () => {
+      const { middleware: mcpi, did } = await createTestMiddleware();
+      const result = await mcpi.handleMCPI({
+        action: 'handshake',
+        nonce: 'test-nonce',
+        audience: did,
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.success).toBe(true);
+      expect(parsed.sessionId).toMatch(/^mcpi_/);
+    });
+
+    it('should dispatch action: "identity" and return server metadata', async () => {
+      const { middleware: mcpi, did } = await createTestMiddleware();
+      const result = await mcpi.handleMCPI({ action: 'identity' });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.did).toBe(did);
+      expect(parsed.kid).toContain('#keys-1');
+      expect(parsed.capabilities).toContain('handshake');
+      expect(parsed.capabilities).toContain('signing');
+      expect(parsed.capabilities).toContain('verification');
+    });
+
+    it('should return error for unknown action', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      const result = await mcpi.handleMCPI({ action: 'does_not_exist' });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error.code).toBe('XMCP_I_EUNKNOWN_ACTION');
+    });
+
+    it('should return error when action is missing', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      const result = await mcpi.handleMCPI({});
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error.code).toBe('XMCP_I_EUNKNOWN_ACTION');
+    });
+
+    it('should return "not implemented" for action: "reputation"', async () => {
+      const { middleware: mcpi } = await createTestMiddleware();
+      const result = await mcpi.handleMCPI({ action: 'reputation' });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error.code).toBe('XMCP_I_ENOT_IMPLEMENTED');
+    });
+
+    it('should still support handleHandshake() directly (backward compat)', async () => {
+      const { middleware: mcpi, did } = await createTestMiddleware();
+      const result = await mcpi.handleHandshake({
+        nonce: 'legacy-nonce',
+        audience: did,
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.success).toBe(true);
+    });
+  });
+
   describe('wrapWithProof', () => {
     it('should attach proof in _meta after handshake', async () => {
       const { middleware: mcpi, did } = await createTestMiddleware();

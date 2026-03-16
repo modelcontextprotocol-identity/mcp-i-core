@@ -195,6 +195,7 @@ export function createConsentMcpServer(
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
+      mcpi.mcpiTool,
       {
         name: 'browse',
         description: 'Browse product categories (public — no delegation required)',
@@ -222,8 +223,8 @@ export function createConsentMcpServer(
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
 
-    if (name === '_mcpi_handshake') {
-      return mcpi.handleHandshake(args as Record<string, unknown>);
+    if (name === '_mcpi') {
+      return mcpi.handleMCPI(args as Record<string, unknown>);
     }
 
     if (name === 'browse') {

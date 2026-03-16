@@ -10,11 +10,13 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMCPIMiddleware, type MCPIMiddleware } from '../../../src/middleware/index.js';
 import { NodeCryptoProvider } from '../../../src/providers/node-crypto.js';
 import { generateDidKeyFromBase64 } from '../../../src/utils/did-helpers.js';
 import { createDelegationIssuerFromIdentity } from '../src/delegation-issuer.js';
-import type { ToolResult } from '../src/server.js';
+import { createConsentFullMcpServer, type ToolResult } from '../src/server.js';
 import type { DelegationCredential, NeedsAuthorizationError } from '../../../src/types/protocol.js';
 
 const crypto = new NodeCryptoProvider();
@@ -89,6 +91,37 @@ describe('MCP Server with consent-full', () => {
 
     expect(result.isError).toBeUndefined();
     expect(result.content[0]!.text).toContain('electronics');
+  });
+
+  it('should route _mcpi with action: "handshake" and return a valid session', async () => {
+    const server = createConsentFullMcpServer(mcpi, { consentUrl: CONSENT_URL });
+    const client = new Client({ name: 'consent-full-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: '_mcpi',
+      arguments: {
+        action: 'handshake',
+        nonce: `consent-full-test-${Date.now()}`,
+        audience: serverDid,
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      success: boolean;
+      sessionId: string;
+      serverDid: string;
+    };
+    expect(parsed.success).toBe(true);
+    expect(parsed.sessionId).toMatch(/^mcpi_/);
+    expect(parsed.serverDid).toBe(serverDid);
+
+    await client.close();
+    await server.close();
   });
 
   // §6.1 — needs_authorization

@@ -14,6 +14,7 @@
 import type { CryptoProvider } from "../providers/base.js";
 import { generateDidKeyFromBase64 } from "../utils/did-helpers.js";
 import {
+  MCPI_ACTIONS,
   createMCPIMiddleware,
   type MCPIIdentityConfig,
   type MCPIDelegationConfig,
@@ -37,6 +38,12 @@ export interface WithMCPIOptions {
   excludeTools?: string[];
   /** Delegation verification config */
   delegation?: MCPIDelegationConfig;
+  /**
+   * How the MCP-I protocol tool is exposed on the server.
+   * - "tool" (default): auto-register `_mcpi`
+   * - "none": do not register MCP-I tool (use middleware APIs for custom runtime hooks)
+   */
+  handshakeExposure?: "tool" | "none";
 }
 
 /**
@@ -73,7 +80,7 @@ interface McpServerLike {
  * Add MCP-I to a McpServer instance.
  *
  * 1. Auto-generates Ed25519 identity (or uses provided one)
- * 2. Registers `_mcpi_handshake` tool
+ * 2. Registers `_mcpi` tool by default (`handshakeExposure: "tool"`)
  * 3. Patches `server.connect()` to transparently wrap the transport with
  *    MCPITransport, which injects detached proofs into all `tools/call`
  *    responses using only the public Transport interface.
@@ -107,30 +114,47 @@ export async function withMCPI(
     options.crypto,
   );
 
-  // Register _mcpi_handshake tool
-  server.registerTool(
-    "_mcpi_handshake",
-    {
-      description:
-        "MCP-I identity handshake — establishes a cryptographic session",
-      inputSchema: {
-        nonce: z.string().describe("Client-generated unique nonce"),
-        audience: z
-          .string()
-          .describe("Intended audience (server DID or URL)"),
-        timestamp: z.number().describe("Unix epoch seconds"),
+  if ((options.handshakeExposure ?? "tool") === "tool") {
+    // Register the unified _mcpi tool for protocol operations.
+    server.registerTool(
+      "_mcpi",
+      {
+        description:
+          "MCP-I protocol — identity verification, session handshake, and server metadata",
+        annotations: { title: "MCP-I Protocol", readOnlyHint: true },
+        inputSchema: {
+          action: z
+            .enum(MCPI_ACTIONS)
+            .describe("Protocol operation to perform"),
+          nonce: z
+            .string()
+            .optional()
+            .describe("Client-generated unique nonce (handshake)"),
+          audience: z
+            .string()
+            .optional()
+            .describe("Intended audience (handshake)"),
+          timestamp: z
+            .number()
+            .optional()
+            .describe("Unix epoch seconds (handshake)"),
+          agentDid: z
+            .string()
+            .optional()
+            .describe("Client agent DID (handshake, optional)"),
+        },
       },
-    },
-    async (args: unknown) => {
-      const result = await mcpi.handleHandshake(
-        args as Record<string, unknown>,
-      );
-      return {
-        ...result,
-        content: result.content.map((c) => ({ ...c, type: "text" as const })),
-      };
-    },
-  );
+      async (args: unknown) => {
+        const result = await mcpi.handleMCPI(
+          args as Record<string, unknown>,
+        );
+        return {
+          ...result,
+          content: result.content.map((c) => ({ ...c, type: "text" as const })),
+        };
+      },
+    );
+  }
 
   // Auto-proof interception via transport wrapper (public API only).
   //
@@ -139,7 +163,7 @@ export async function withMCPI(
   // Tool registration order does not matter — proofs are injected at the
   // transport boundary, after McpServer has already dispatched the call.
   if (options.proofAllTools !== false) {
-    const exclude = ["_mcpi_handshake", ...(options.excludeTools ?? [])];
+    const exclude = ["_mcpi", "_mcpi_handshake", ...(options.excludeTools ?? [])];
     const originalConnect = server.connect.bind(server);
 
     server.connect = (transport: Transport) =>
