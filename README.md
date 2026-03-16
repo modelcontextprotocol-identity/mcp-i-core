@@ -1,413 +1,179 @@
 # @mcp-i/core
 
-**MCP-I protocol reference implementation** — delegation, proof, and session for the Model Context Protocol Identity (MCP-I) standard.
+**Identity, delegation, and proof for the Model Context Protocol.**
 
-> This package is a [DIF TAAWG](https://identity.foundation/working-groups/agent-and-authorization.html) protocol reference implementation donated to the Decentralized Identity Foundation.
+MCP-I answers three questions for every AI agent tool call: *who* is calling (DID), *are they allowed* (delegation VC), and *what happened* (signed proof). It uses W3C Verifiable Credentials, Ed25519 signatures, and Decentralized Identifiers — no central authority required.
 
----
-
-## What is MCP-I?
-
-MCP-I (Model Context Protocol Identity) is a protocol extension for the Model Context Protocol (MCP) that adds cryptographic identity, delegation chains, and non-repudiation proofs to AI agent interactions. It enables MCP servers to verify *who* is calling (agent DID), *on whose behalf* (user delegation), and *what* was done (signed proof). Delegations are issued as W3C Verifiable Credentials with Ed25519 signatures, revocation is tracked via StatusList2021, and every tool call produces a detached JWS proof for audit trails.
-
-Spec: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io)
+> [DIF TAAWG](https://identity.foundation/working-groups/agent-and-authorization.html) protocol reference implementation. Spec: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io)
 
 ---
 
-## What this package provides
+## Try It
 
-| Module | Description |
-|--------|-------------|
-| **delegation** | W3C VC delegation issuance (`DelegationCredentialIssuer`), verification (`DelegationCredentialVerifier`), graph management, StatusList2021 revocation, cascading revocation, outbound delegation propagation (`buildOutboundDelegationHeaders`), DID:key resolution (`createDidKeyResolver`), and DID:web resolution (`createDidWebResolver`) |
-| **proof** | Platform-agnostic proof generation (`ProofGenerator`) and server-side verification (`ProofVerifier`) — JCS canonicalization, SHA-256 hashing, Ed25519 JWS signing/verification |
-| **session** | Handshake validation and session management (`SessionManager`) with nonce replay prevention |
-| **auth** | Authorization handshake orchestration (`verifyOrHints`) — checks delegation and returns authorization hints |
-| **middleware** | MCP SDK integration — `withMCPI(server, { crypto })` adds identity, sessions, and auto-proof to any `McpServer` in one call. Lower-level `createMCPIMiddleware` available for the `Server` API. |
-| **providers** | Abstract base classes (`CryptoProvider`, `StorageProvider`, etc.) and in-memory implementations for testing |
-| **types** | Pure TypeScript interfaces for all protocol types — zero runtime dependencies |
-
----
-
-## Quick Start
-
-The fastest way to see MCP-I in action is the example server:
+See the consent flow in action — an agent calls a protected tool, a human approves, and the agent retries with a signed credential:
 
 ```bash
 git clone https://github.com/modelcontextprotocol-identity/mcp-i-core.git
 cd mcp-i-core
 pnpm install
-npx tsx examples/node-server/server.ts
+npx tsx examples/consent-basic/src/server.ts
 ```
 
-This starts an MCP server on stdio with identity handshake and proof generation. See [`examples/node-server/README.md`](./examples/node-server/README.md) for details.
+Then connect with [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
-For outbound delegation propagation (forwarding delegation context to downstream services), see [`examples/outbound-delegation/README.md`](./examples/outbound-delegation/README.md).
+```bash
+npx @modelcontextprotocol/inspector
+# → Connect to http://localhost:3002/sse
+```
+
+Call `checkout` — you'll get a consent link. Open it, approve, then retry the tool. [Full walkthrough →](./examples/consent-basic/README.md)
 
 ---
 
-## Installation
+## Add to Your Server
+
+One line to add identity, sessions, and proofs to any MCP server:
+
+```typescript
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { withMCPI, NodeCryptoProvider } from '@mcp-i/core';
+
+const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+await withMCPI(server, { crypto: new NodeCryptoProvider() });
+
+// Register tools normally — proofs are attached automatically
+```
+
+Every tool response now includes a cryptographic proof. For protected tools that require human consent, add `wrapWithDelegation`:
+
+```typescript
+import { createMCPIMiddleware, generateIdentity, NodeCryptoProvider } from '@mcp-i/core';
+
+const crypto = new NodeCryptoProvider();
+const identity = await generateIdentity(crypto);
+const mcpi = createMCPIMiddleware({ identity, session: { sessionTtlMinutes: 60 } }, crypto);
+
+// Public tool — proof attached automatically
+const search = mcpi.wrapWithProof('search', async (args) => ({
+  content: [{ type: 'text', text: `Results for: ${args['query']}` }],
+}));
+
+// Protected tool — requires delegation with scope 'orders:write'
+const placeOrder = mcpi.wrapWithDelegation(
+  'place_order',
+  { scopeId: 'orders:write', consentUrl: 'https://example.com/consent' },
+  mcpi.wrapWithProof('place_order', async (args) => ({
+    content: [{ type: 'text', text: `Order placed: ${args['item']}` }],
+  })),
+);
+```
+
+---
+
+## Install
 
 ```bash
 npm install @mcp-i/core
 ```
 
+Requires Node.js 20+. Peer dependency on `@modelcontextprotocol/sdk` (optional — only needed for `withMCPI`).
+
 ---
 
-## Delegation Hardening Compatibility
+## Architecture
 
-MCP-I now enforces strict delegation-chain and status-list checks by default.
-
-- Credentials with `parentId` require `delegation.resolveDelegationChain`.
-- Credentials with `credentialStatus` require `delegation.statusListResolver`.
-
-For temporary migration support in legacy integrations, you can opt in to compatibility mode:
-
-```typescript
-await withMCPI(server, {
-  crypto: new NodeCryptoProvider(),
-  delegation: {
-    allowLegacyUnsafeDelegation: true, // temporary compatibility escape hatch
-  },
-});
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Agent      │────▶│  MCP Server  │────▶│  Downstream  │
+│  (did:key)   │     │  + MCP-I     │     │  Services    │
+└─────────────┘     └──────────────┘     └─────────────┘
+       │                    │                     │
+       │ handshake          │ verify delegation   │ outbound headers
+       │ (nonce+DID)        │ attach proof        │ (X-Agent-DID,
+       │                    │ check scopes        │  X-Delegation-Chain)
+       ▼                    ▼                     ▼
+   Session established   Tool executes        Context forwarded
+   with replay           with signed           to downstream
+   prevention            receipt               with delegation
 ```
 
-Compatibility mode weakens security guarantees and should only be used during migration.
+---
+
+## Modules
+
+| Module | What it does |
+|--------|-------------|
+| **middleware** | `withMCPI(server)` — one-call integration. `createMCPIMiddleware` for low-level control. |
+| **delegation** | Issue and verify W3C VCs. DID:key and DID:web resolution. StatusList2021 revocation. Cascading revocation. |
+| **proof** | Generate and verify detached JWS proofs with canonical hashing (JCS + SHA-256). |
+| **session** | Nonce-based handshake. Replay prevention. Session TTL management. |
+| **providers** | Abstract `CryptoProvider`, `IdentityProvider`, `StorageProvider`. Plug in your own KMS, HSM, or vault. |
+| **types** | Pure TypeScript interfaces. Zero runtime dependencies. |
+
+All modules available as subpath exports: `@mcp-i/core/delegation`, `@mcp-i/core/proof`, etc.
 
 ---
 
 ## Examples
 
-> Requires Node.js 20+. Save each block as `example.ts` and run with `npx tsx example.ts`.
+| Example | What it shows |
+|---------|--------------|
+| [**consent-basic**](./examples/consent-basic/) | Human-in-the-loop consent flow: `needs_authorization` → consent page → delegation VC → tool execution. SSE + Streamable HTTP transports. |
+| [**node-server**](./examples/node-server/) | Low-level Server API with handshake, proof, and restricted tools. |
+| [**brave-search-mcp-server**](./examples/brave-search-mcp-server/) | Real-world MCP server wrapping Brave Search with MCP-I identity and proofs. |
+| [**outbound-delegation**](./examples/outbound-delegation/) | Forwarding delegation context to downstream services (§7 gateway pattern). |
+| [**verify-proof**](./examples/verify-proof/) | Standalone proof verification with DID:key resolution. |
+| [**context7-with-mcpi**](./examples/context7-with-mcpi/) | Adding MCP-I to an existing MCP server with `withMCPI`. |
 
 ---
 
-## Example 1 — Issue a Delegation VC
+## Extension Points
+
+MCP-I is a protocol, not a platform. All cryptographic operations, storage, and identity management are abstracted behind interfaces you implement:
 
 ```typescript
-import {
-  createHash,
-  createPrivateKey,
-  generateKeyPairSync,
-  randomBytes,
-  sign as nodeSign,
-} from 'node:crypto';
-import {
-  CryptoProvider,
-  MemoryIdentityProvider,
-  DelegationCredentialIssuer,
-  type DelegationIdentityProvider,
-  type VCSigningFunction,
-} from '@mcp-i/core';
-
-// Minimal Node.js CryptoProvider backed by node:crypto
-class NodeCryptoProvider extends CryptoProvider {
-  async generateKeyPair() {
-    const { privateKey: pk, publicKey: pub } = generateKeyPairSync('ed25519', {
-      privateKeyEncoding: { type: 'pkcs8', format: 'der' },
-      publicKeyEncoding: { type: 'spki', format: 'der' },
-    });
-    // Ed25519 PKCS8 DER: 16-byte header + 32-byte seed
-    // Ed25519 SPKI DER:  12-byte header + 32-byte public key
-    return {
-      privateKey: (pk as Buffer).subarray(16).toString('base64'),
-      publicKey: (pub as Buffer).subarray(12).toString('base64'),
-    };
+// Use AWS KMS instead of local keys
+class KMSCryptoProvider extends CryptoProvider {
+  async sign(data: Uint8Array, keyArn: string) {
+    return kmsClient.sign({ KeyId: keyArn, Message: data });
   }
-  async hash(data: Uint8Array) {
-    return 'sha256:' + createHash('sha256').update(data).digest('hex');
-  }
-  async randomBytes(n: number) { return new Uint8Array(randomBytes(n)); }
-  async sign(data: Uint8Array, privateKeyBase64: string) {
-    const seed = Buffer.from(privateKeyBase64, 'base64').subarray(0, 32);
-    const hdr = Buffer.from([
-      0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05,
-      0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-    ]);
-    const key = createPrivateKey({ key: Buffer.concat([hdr, seed]), format: 'der', type: 'pkcs8' });
-    return new Uint8Array(nodeSign(null, data, key));
-  }
-  async verify(): Promise<boolean> { throw new Error('unused'); }
 }
 
-const cryptoProvider = new NodeCryptoProvider();
-
-// MemoryIdentityProvider generates a real Ed25519 DID + key pair
-const identityProvider = new MemoryIdentityProvider(cryptoProvider);
-const agent = await identityProvider.getIdentity();
-
-// Adapt AgentIdentity to the DelegationIdentityProvider interface
-const identity: DelegationIdentityProvider = {
-  getDid: () => agent.did,
-  getKeyId: () => agent.kid,
-  getPrivateKey: () => agent.privateKey,
-};
-
-// Real Ed25519 signing function — delegates to NodeCryptoProvider
-const signingFunction: VCSigningFunction = async (canonicalVC, issuerDid) => {
-  const sig = await cryptoProvider.sign(
-    new TextEncoder().encode(canonicalVC),
-    agent.privateKey
-  );
-  return {
-    type: 'Ed25519Signature2020',
-    created: new Date().toISOString(),
-    verificationMethod: `${issuerDid}#key-1`,
-    proofPurpose: 'assertionMethod',
-    proofValue: Buffer.from(sig).toString('base64url'),
-  };
-};
-
-const issuer = new DelegationCredentialIssuer(identity, signingFunction);
-
-const vc = await issuer.createAndIssueDelegation({
-  id: 'delegation-001',
-  issuerDid: agent.did,
-  subjectDid: 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuias8sisDArDJF74t',
-  constraints: {
-    scopes: ['tool:execute', 'resource:read'],
-    notAfter: Math.floor(Date.now() / 1000) + 3600,
-  },
-});
-
-console.log('VC type:', vc.type);
-// ['VerifiableCredential', 'DelegationCredential']
-console.log('Scopes:', vc.credentialSubject.delegation.constraints.scopes);
-// ['tool:execute', 'resource:read']
-console.log('Proof type:', vc.proof?.type);
-// 'Ed25519Signature2020'
-```
-
----
-
-## Example 2 — Session Handshake
-
-```typescript
-import { randomBytes } from 'node:crypto';
-import {
-  CryptoProvider,
-  SessionManager,
-  MemoryNonceCacheProvider,
-  createHandshakeRequest,
-} from '@mcp-i/core';
-
-// SessionManager only needs randomBytes() for session ID generation
-class NodeCryptoProvider extends CryptoProvider {
-  async randomBytes(n: number) { return new Uint8Array(randomBytes(n)); }
-  async generateKeyPair(): Promise<{ privateKey: string; publicKey: string }> { throw new Error('unused'); }
-  async hash(_: Uint8Array): Promise<string> { throw new Error('unused'); }
-  async sign(_: Uint8Array, __: string): Promise<Uint8Array> { throw new Error('unused'); }
-  async verify(_: Uint8Array, __: Uint8Array, ___: string): Promise<boolean> { throw new Error('unused'); }
+// Use Redis instead of in-memory nonce cache
+class RedisNonceCacheProvider extends NonceCacheProvider {
+  async hasNonce(nonce: string) { return redis.exists(`nonce:${nonce}`); }
+  async addNonce(nonce: string, ttl: number) { redis.setex(`nonce:${nonce}`, ttl, '1'); }
 }
-
-const cryptoProvider = new NodeCryptoProvider();
-const nonceCache = new MemoryNonceCacheProvider();
-
-const sessionManager = new SessionManager(cryptoProvider, {
-  nonceCache,
-  sessionTtlMinutes: 30,
-  timestampSkewSeconds: 120,
-  serverDid: 'did:web:my-mcp-server.example.com',
-});
-
-// Client: build handshake request (uses globalThis.crypto, built into Node 20+)
-const request = createHandshakeRequest('did:web:my-mcp-server.example.com');
-request.agentDid = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
-
-// Server: validate it
-const result = await sessionManager.validateHandshake(request);
-
-if (result.success && result.session) {
-  console.log('Session ID:', result.session.sessionId);
-  // e.g. 'mcpi_4f3e2a1b-c7d2-4e5f-b6a3-...'
-  console.log('Audience:', result.session.audience);
-  // 'did:web:my-mcp-server.example.com'
-  console.log('Agent DID:', result.session.agentDid);
-  // 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK'
-}
-console.log('Stats:', sessionManager.getStats());
-// { activeSessions: 1, config: { sessionTtlMinutes: 30, ... } }
 ```
+
+Supported DID methods: `did:key` (built-in, self-resolving), `did:web` (built-in, HTTP resolution), or any custom method via `DIDResolver`.
 
 ---
 
-## Example 3 — Generate a Tool Call Proof
+## Conformance
 
-```typescript
-import {
-  createHash,
-  createPrivateKey,
-  generateKeyPairSync,
-  randomBytes,
-  sign as nodeSign,
-} from 'node:crypto';
-import {
-  CryptoProvider,
-  MemoryIdentityProvider,
-  ProofGenerator,
-  SessionManager,
-} from '@mcp-i/core';
+Three levels defined in [CONFORMANCE.md](./CONFORMANCE.md):
 
-class NodeCryptoProvider extends CryptoProvider {
-  async generateKeyPair() {
-    const { privateKey: pk, publicKey: pub } = generateKeyPairSync('ed25519', {
-      privateKeyEncoding: { type: 'pkcs8', format: 'der' },
-      publicKeyEncoding: { type: 'spki', format: 'der' },
-    });
-    return {
-      privateKey: (pk as Buffer).subarray(16).toString('base64'),
-      publicKey: (pub as Buffer).subarray(12).toString('base64'),
-    };
-  }
-  async hash(data: Uint8Array) {
-    return 'sha256:' + createHash('sha256').update(data).digest('hex');
-  }
-  async randomBytes(n: number) { return new Uint8Array(randomBytes(n)); }
-  async sign(data: Uint8Array, privateKeyBase64: string) {
-    const seed = Buffer.from(privateKeyBase64, 'base64').subarray(0, 32);
-    const hdr = Buffer.from([
-      0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05,
-      0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-    ]);
-    const key = createPrivateKey({ key: Buffer.concat([hdr, seed]), format: 'der', type: 'pkcs8' });
-    return new Uint8Array(nodeSign(null, data, key));
-  }
-  async verify(): Promise<boolean> { throw new Error('unused'); }
-}
-
-const cryptoProvider = new NodeCryptoProvider();
-
-// MemoryIdentityProvider generates a fresh DID + Ed25519 key pair
-const identityProvider = new MemoryIdentityProvider(cryptoProvider);
-const agent = await identityProvider.getIdentity();
-
-// ProofGenerator signs tool call request+response pairs with the agent's key
-const generator = new ProofGenerator(agent, cryptoProvider);
-
-const request = {
-  method: 'tools/call',
-  params: { name: 'read_file', arguments: { path: '/etc/hosts' } },
-};
-const response = { data: { content: '127.0.0.1 localhost' } };
-
-// SessionContext — in production this comes from SessionManager.validateHandshake()
-const session = {
-  sessionId: 'mcpi_demo-session',
-  audience: 'did:web:my-mcp-server.example.com',
-  nonce: SessionManager.generateNonce(),
-  timestamp: Math.floor(Date.now() / 1000),
-  createdAt: Math.floor(Date.now() / 1000),
-  lastActivity: Math.floor(Date.now() / 1000),
-  ttlMinutes: 30,
-  identityState: 'anonymous' as const,
-};
-
-const proof = await generator.generateProof(request, response, session);
-
-console.log('JWS (first 40 chars):', proof.jws.slice(0, 40) + '...');
-// 'eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk...'
-console.log('Request hash:', proof.meta.requestHash);
-// 'sha256:e3b0...'
-console.log('Agent DID:', proof.meta.did);
-// 'did:key:z...'
-```
+| Level | Requirements |
+|-------|-------------|
+| **Level 1** — Core Crypto | Ed25519 signatures, DID:key resolution, JCS canonicalization |
+| **Level 2** — Full Session | Nonce-based handshake, session management, replay prevention |
+| **Level 3** — Full Delegation | W3C VC issuance/verification, scope attenuation, StatusList2021, cascading revocation |
 
 ---
 
-## Example 4 — MCP Server with Middleware (`withMCPI`)
+## Contributing
 
-The recommended way to add MCP-I to any `McpServer`-based server:
+See [CONTRIBUTING.md](./CONTRIBUTING.md). DCO sign-off required. All PRs must pass CI (type check, lint, test across Node 20/22 on Linux/macOS/Windows).
 
-```typescript
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { withMCPI, CryptoProvider } from '@mcp-i/core';
-import { z } from 'zod';
+## Governance
 
-// ... (NodeCryptoProvider as above)
+See [GOVERNANCE.md](./GOVERNANCE.md). Lazy consensus for non-breaking changes. Explicit vote for breaking changes.
 
-const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+## Security
 
-// One call: auto-generates identity, registers handshake, auto-proofs all tools
-await withMCPI(server, { crypto: new NodeCryptoProvider() });
-
-// Register tools normally — proofs are attached automatically
-server.registerTool(
-  'echo',
-  { description: 'Echo a message', inputSchema: { message: z.string() } },
-  async ({ message }) => ({ content: [{ type: 'text' as const, text: `Echo: ${message}` }] }),
-);
-
-await server.connect(new StdioServerTransport());
-```
-
-<details>
-<summary>Low-level Server API (advanced)</summary>
-
-For the low-level `Server` API with manual request handlers, use `createMCPIMiddleware` directly:
-
-```typescript
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { createMCPIMiddleware, generateIdentity } from '@mcp-i/core';
-
-const crypto = new NodeCryptoProvider();
-const identity = await generateIdentity(crypto);
-
-const mcpi = createMCPIMiddleware({ identity, session: { sessionTtlMinutes: 60 } }, crypto);
-
-const echo = mcpi.wrapWithProof('echo', async (args) => ({
-  content: [{ type: 'text', text: `Echo: ${args['message']}` }],
-}));
-
-const server = new Server({ name: 'my-server', version: '1.0.0' }, { capabilities: { tools: {} } });
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [mcpi.handshakeTool, { name: 'echo', inputSchema: { type: 'object' } }],
-}));
-
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  if (req.params.name === '_mcpi_handshake') return mcpi.handleHandshake(req.params.arguments ?? {});
-  if (req.params.name === 'echo') return echo(req.params.arguments ?? {});
-  return { content: [{ type: 'text', text: 'Unknown tool' }], isError: true };
-});
-
-await server.connect(new StdioServerTransport());
-```
-
-</details>
-
----
-
-## Example 5 — Verify a Proof with DID:key Resolution
-
-```typescript
-import { ProofVerifier, createDidKeyResolver, CryptoProvider } from '@mcp-i/core';
-
-// ... (NodeCryptoProvider with verify + hash)
-
-const crypto = new NodeCryptoProvider();
-const didResolver = createDidKeyResolver();
-
-const verifier = new ProofVerifier({
-  cryptoProvider: crypto,
-  fetchPublicKeyFromDID: async (did) => {
-    const result = didResolver(did);
-    return result?.publicKeyJwk ?? null;
-  },
-  timestampSkewSeconds: 120,
-});
-
-const result = await verifier.verifyProofDetached(proof);
-console.log('Valid:', result.valid);
-```
-
----
+See [SECURITY.md](./SECURITY.md). 48-hour acknowledgement. 90-day coordinated disclosure.
 
 ## License
 
 MIT — see [LICENSE](./LICENSE)
-
----
-
-*This package is a DIF TAAWG protocol reference implementation.*
-*Spec: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io)*
