@@ -76,6 +76,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@kya-os/consent": "^0.1.37",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@types/express": "^5.0.6",
     "@types/node": "^20.14.9",
