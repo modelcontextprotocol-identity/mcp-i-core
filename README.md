@@ -119,6 +119,7 @@ All modules available as subpath exports: `@mcp-i/core/delegation`, `@mcp-i/core
 | Example | What it shows |
 |---------|--------------|
 | [**consent-basic**](./examples/consent-basic/) | Human-in-the-loop consent flow: `needs_authorization` → consent page → delegation VC → tool execution. SSE + Streamable HTTP transports. |
+| [**consent-full**](./examples/consent-full/) | Same consent flow as consent-basic, powered by [`@kya-os/consent`](https://www.npmjs.com/package/@kya-os/consent) — multi-mode auth, configurable branding, and production-grade consent UI. |
 | [**node-server**](./examples/node-server/) | Low-level Server API with handshake, proof, and restricted tools. |
 | [**brave-search-mcp-server**](./examples/brave-search-mcp-server/) | Real-world MCP server wrapping Brave Search with MCP-I identity and proofs. |
 | [**outbound-delegation**](./examples/outbound-delegation/) | Forwarding delegation context to downstream services (§7 gateway pattern). |
