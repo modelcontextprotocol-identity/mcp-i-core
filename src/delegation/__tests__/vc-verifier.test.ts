@@ -471,7 +471,7 @@ describe("DelegationCredentialVerifier", () => {
       expect(mockStatusListResolver.checkStatus).not.toHaveBeenCalled();
     });
 
-    it("should skip status checking when no resolver available", async () => {
+    it("should fail closed when no status resolver available but credential has credentialStatus", async () => {
       await setupDefaultContractsMocks();
       const verifierWithoutResolver = new DelegationCredentialVerifier({
         didResolver: mockDidResolver,
@@ -506,8 +506,9 @@ describe("DelegationCredentialVerifier", () => {
       const result =
         await verifierWithoutResolver.verifyDelegationCredential(vcWithStatus);
 
-      expect(result.valid).toBe(true);
-      expect(result.checks?.statusValid).toBe(true); // Trust but don't verify
+      expect(result.valid).toBe(false);
+      expect(result.checks?.statusValid).toBe(false);
+      expect(result.reason).toContain("no status list resolver is configured");
     });
 
     it("should fail when credential is revoked", async () => {

@@ -350,8 +350,9 @@ export class DelegationCredentialVerifier {
     try {
       if (!statusListResolver) {
         return {
-          valid: true,
-          reason: "No status list resolver available, skipping status check",
+          valid: false,
+          reason:
+            "Credential has credentialStatus but no status list resolver is configured — cannot verify revocation status",
           durationMs: Date.now() - startTime,
         };
       }

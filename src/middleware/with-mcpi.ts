@@ -760,8 +760,13 @@ export function createMCPIMiddleware(
           }
         }
 
+        const skipStatusForLegacy =
+          legacyUnsafeDelegationEnabled &&
+          !!credential.credentialStatus &&
+          !delegationConfig?.statusListResolver;
         const credentialVerification = await verifier.verifyDelegationCredential(
           credential,
+          skipStatusForLegacy ? { skipStatus: true } : undefined,
         );
         if (!credentialVerification.valid) {
           return {
