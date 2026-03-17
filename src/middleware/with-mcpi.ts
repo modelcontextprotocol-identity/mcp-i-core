@@ -571,8 +571,14 @@ export function createMCPIMiddleware(
 
         // Attach proof as _meta (rendered by MCP Inspector, invisible to LLMs)
         result._meta = { proof };
-      } catch {
-        // Proof generation failure is non-fatal — the tool result is still valid
+      } catch (error) {
+        logger.error("[mcpi] Proof generation failed", {
+          tool: toolName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        result._meta = {
+          proofError: "Proof generation failed — response is unproven",
+        };
       }
 
       return result;
