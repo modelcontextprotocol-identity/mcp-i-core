@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createMCPIMiddleware,
   type MCPIDelegationConfig,
@@ -36,7 +36,7 @@ async function createTestMiddleware(options?: {
     crypto,
   );
 
-  return { middleware, did };
+  return { middleware, did, crypto };
 }
 
 async function createDelegationIssuer(options?: { did?: string; kid?: string }) {
@@ -282,6 +282,36 @@ describe('createMCPIMiddleware', () => {
       const result = await handler({});
       expect(result.content[0].text).toBe('Hello!');
       expect(result._meta).toBeUndefined();
+    });
+
+    it('should surface proofError in _meta when proof generation fails', async () => {
+      const { middleware: mcpi, did, crypto } = await createTestMiddleware();
+
+      // Handshake first
+      const hs = await mcpi.handleHandshake({
+        nonce: 'test-nonce-proof-fail',
+        audience: did,
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+      const sessionId = JSON.parse(hs.content[0].text).sessionId;
+
+      // Make crypto.hash throw to break proof generation after handshake succeeds
+      vi.spyOn(crypto, 'hash').mockRejectedValue(new Error('HSM unavailable'));
+
+      const handler = mcpi.wrapWithProof('greet', async () => ({
+        content: [{ type: 'text', text: 'Hello!' }],
+      }));
+
+      const result = await handler({}, sessionId);
+
+      // Tool result still returned
+      expect(result.content[0].text).toBe('Hello!');
+      expect(result.isError).toBeUndefined();
+
+      // But _meta signals the proof failure
+      expect(result._meta).toBeDefined();
+      expect(result._meta!.proofError).toBeDefined();
+      expect(result._meta!.proof).toBeUndefined();
     });
   });
 

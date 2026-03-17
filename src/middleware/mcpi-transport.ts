@@ -18,6 +18,7 @@
  */
 
 import type { MCPIMiddleware, MCPIToolHandler } from "./with-mcpi.js";
+import { logger } from "../logging/index.js";
 
 /** Minimal Transport interface — matches @modelcontextprotocol/sdk Transport */
 export interface Transport {
@@ -106,9 +107,18 @@ export function createMCPITransport(
               };
             }
           }
-        } catch {
-          // Proof generation failure must never block the tool response.
-          // The result still reaches the client; the proof is simply absent.
+        } catch (error) {
+          logger.error("[mcpi-transport] Proof injection failed", {
+            tool: call.toolName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          const rawResult = message.result as ToolResult | undefined;
+          if (rawResult) {
+            rawResult._meta = {
+              proofError: "Proof generation failed — response is unproven",
+            };
+            message = { ...message, result: rawResult };
+          }
         }
       }
 
