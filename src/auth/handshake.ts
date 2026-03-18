@@ -202,14 +202,12 @@ export class MemoryResumeTokenStore implements ResumeTokenStore {
  * @param agentDid - The agent's DID to verify
  * @param scopes - Required scopes for the operation
  * @param config - Authorization configuration including verifier, token store, etc.
- * @param _resumeToken - Optional resume token from previous authorization attempt
  * @returns Result indicating authorization status, delegation, or auth hints
  */
 export async function verifyOrHints(
   agentDid: string,
   scopes: string[],
   config: AuthHandshakeConfig,
-  _resumeToken?: string
 ): Promise<VerifyOrHintsResult> {
   const startTime = Date.now();
 
