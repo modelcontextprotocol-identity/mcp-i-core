@@ -112,7 +112,7 @@ async function main() {
 
   const serverAKeys = await cryptoProvider.generateKeyPair();
   const serverADid = generateDidKeyFromBase64(serverAKeys.publicKey);
-  const serverAKid = `${serverADid}#keys-1`;
+  const serverAKid = `${serverADid}#${serverADid.replace('did:key:', '')}`;
   console.log(`Server A DID: ${serverADid.slice(0, 30)}...`);
 
   const agentKeys = await cryptoProvider.generateKeyPair();

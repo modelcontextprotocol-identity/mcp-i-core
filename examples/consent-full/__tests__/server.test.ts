@@ -54,7 +54,7 @@ describe('MCP Server with consent-full', () => {
   beforeAll(async () => {
     const keyPair = await crypto.generateKeyPair();
     const did = generateDidKeyFromBase64(keyPair.publicKey);
-    const kid = `${did}#keys-1`;
+    const kid = `${did}#${did.replace('did:key:', '')}`;
     serverDid = did;
 
     mcpi = createMCPIMiddleware(

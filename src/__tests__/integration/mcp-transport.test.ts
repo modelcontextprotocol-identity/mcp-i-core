@@ -64,7 +64,7 @@ async function setupMcpPair(options?: { autoSession?: boolean }) {
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#keys-1`;
+  const kid = `${did}#${did.replace('did:key:', '')}`;
 
   const mcpi = createMCPIMiddleware(
     {
@@ -157,7 +157,7 @@ async function issueDelegationVC(scopes: string[]): Promise<DelegationCredential
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#keys-1`;
+  const kid = `${did}#${did.replace('did:key:', '')}`;
 
   const signingFn = async (
     canonicalVC: string,

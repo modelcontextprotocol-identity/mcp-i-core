@@ -74,7 +74,7 @@ describe("MCP-I Full Protocol Flow", () => {
     const agent = await identityProvider.getIdentity();
 
     expect(agent.did).toMatch(/^did:key:z/);
-    expect(agent.kid).toMatch(/#keys-1$/);
+    expect(agent.kid).toMatch(/#z[\w]+$/);
 
     // ── Step 2: Establish session via handshake ──────────────────
     const serverDid = "did:web:test-server.example.com";

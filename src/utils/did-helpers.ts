@@ -208,3 +208,22 @@ export function generateDidKeyFromBase64(publicKeyBase64: string): string {
   );
   return generateDidKeyFromBytes(publicKeyBytes);
 }
+
+/**
+ * Get the spec-compliant fragment identifier for a did:key DID.
+ *
+ * Per the did:key spec (W3C CCG), the fragment equals the multibase-encoded
+ * public key value (the DID-specific-id). For example:
+ *   did:key:z6MkABC... → z6MkABC...
+ *
+ * @see https://w3c-ccg.github.io/did-key-spec/#document-creation-algorithm
+ * @param did - A did:key DID string
+ * @returns The fragment identifier (multibase value), or 'keys-1' as fallback for non-did:key
+ */
+export function didKeyFragment(did: string): string {
+  if (did.startsWith('did:key:')) {
+    return did.slice('did:key:'.length);
+  }
+  // Fallback for non-did:key methods
+  return 'keys-1';
+}

@@ -198,8 +198,8 @@ describe("did:key Resolver", () => {
       expect(didDoc?.verificationMethod?.[0].type).toBe("Ed25519VerificationKey2020");
       expect(didDoc?.verificationMethod?.[0].controller).toBe(didKey);
       expect(didDoc?.verificationMethod?.[0].publicKeyJwk).toBeDefined();
-      expect(didDoc?.authentication).toContain(`${didKey}#keys-1`);
-      expect(didDoc?.assertionMethod).toContain(`${didKey}#keys-1`);
+      expect(didDoc?.authentication).toContain(`${didKey}#${didKey.replace('did:key:', '')}`);
+      expect(didDoc?.assertionMethod).toContain(`${didKey}#${didKey.replace('did:key:', '')}`);
     });
 
     it("should return null for non-Ed25519 did:key", async () => {

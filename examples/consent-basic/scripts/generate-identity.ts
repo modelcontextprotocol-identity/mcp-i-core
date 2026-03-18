@@ -47,7 +47,7 @@ async function main() {
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#keys-1`;
+  const kid = `${did}#${did.replace('did:key:', '')}`;
 
   const identity: PersistedIdentity = {
     did,

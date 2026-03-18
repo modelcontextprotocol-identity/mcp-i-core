@@ -77,7 +77,7 @@ export async function startConsentServer(
     const did = generateDidKeyFromBase64(keyPair.publicKey);
     const identity: AgentIdentityConfig = {
       did,
-      kid: `${did}#keys-1`,
+      kid: `${did}#${did.replace('did:key:', '')}`,
       privateKey: keyPair.privateKey,
       publicKey: keyPair.publicKey,
     };

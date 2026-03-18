@@ -267,7 +267,7 @@ export async function createMcpiMiddleware() {
   } else {
     const keyPair = await crypto.generateKeyPair();
     did = generateDidKeyFromBase64(keyPair.publicKey);
-    kid = `${did}#keys-1`;
+    kid = `${did}#${did.replace('did:key:', '')}`;
     privateKey = keyPair.privateKey;
     publicKey = keyPair.publicKey;
     process.stderr.write(`[server] Generated ephemeral identity (run 'npm run generate-identity' to persist)\n`);

@@ -11,7 +11,7 @@ import {
   IdentityProvider,
   type AgentIdentity,
 } from './base.js';
-import { generateDidKeyFromBase64 } from '../utils/did-helpers.js';
+import { generateDidKeyFromBase64, didKeyFragment } from '../utils/did-helpers.js';
 
 export class MemoryStorageProvider extends StorageProvider {
   private store: Map<string, string> = new Map();
@@ -116,7 +116,7 @@ export class MemoryIdentityProvider extends IdentityProvider {
 
     return {
       did,
-      kid: `${did}#keys-1`,
+      kid: `${did}#${didKeyFragment(did)}`,
       privateKey: keyPair.privateKey,
       publicKey: keyPair.publicKey,
       createdAt: new Date().toISOString(),
