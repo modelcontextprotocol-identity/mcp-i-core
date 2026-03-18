@@ -141,7 +141,7 @@ describe('E2E: consent -> delegation -> execution', () => {
     const result = await checkoutHandler({ item: 'laptop', _mcpi_delegation: vc });
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content[0]!.text) as { error: string };
-    expect(parsed.error).toBe('delegation_scope_missing');
+    expect(parsed.error).toBe('insufficient_scope');
   });
 
   // Deny flow

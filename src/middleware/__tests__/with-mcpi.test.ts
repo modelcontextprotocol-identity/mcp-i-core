@@ -126,7 +126,7 @@ describe('createMCPIMiddleware', () => {
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(false);
-      expect(parsed.error.code).toBe('MCPI_INVALID_HANDSHAKE');
+      expect(parsed.error.code).toBe('handshake_failed');
     });
   });
 
@@ -184,7 +184,7 @@ describe('createMCPIMiddleware', () => {
 
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.error.code).toBe('XMCP_I_EUNKNOWN_ACTION');
+      expect(parsed.error.code).toBe('invalid_request');
     });
 
     it('should return error when action is missing', async () => {
@@ -193,7 +193,7 @@ describe('createMCPIMiddleware', () => {
 
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.error.code).toBe('XMCP_I_EUNKNOWN_ACTION');
+      expect(parsed.error.code).toBe('invalid_request');
     });
 
     it('should return "not implemented" for action: "reputation"', async () => {
@@ -202,7 +202,7 @@ describe('createMCPIMiddleware', () => {
 
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.error.code).toBe('XMCP_I_ENOT_IMPLEMENTED');
+      expect(parsed.error.code).toBe('runtime_error');
     });
 
     it('should still support handleHandshake() directly (backward compat)', async () => {
@@ -350,7 +350,7 @@ describe('createMCPIMiddleware', () => {
 
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.error).toBe('delegation_scope_missing');
+      expect(parsed.error).toBe('insufficient_scope');
     });
 
     it('should accept and call handler when VC has correct scope and valid signature', async () => {

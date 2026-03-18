@@ -138,7 +138,7 @@ describe('MCP Server with consent-basic', () => {
 
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content[0]!.text) as { error: string };
-    expect(parsed.error).toBe('delegation_scope_missing');
+    expect(parsed.error).toBe('insufficient_scope');
   });
 
   // §4.2 — Expired delegation

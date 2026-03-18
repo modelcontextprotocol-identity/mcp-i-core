@@ -47,6 +47,7 @@ import {
   type DelegationRecord,
 } from "../types/protocol.js";
 import { logger } from "../logging/index.js";
+import { MCPI_ERROR_CODES } from "../errors.js";
 import { canonicalizeJSON } from "../delegation/utils.js";
 import { base64urlDecodeToBytes, base64urlEncodeFromBytes, bytesToBase64 } from "../utils/base64.js";
 
@@ -392,7 +393,7 @@ export function createMCPIMiddleware(
             text: JSON.stringify({
               success: false,
               error: {
-                code: "MCPI_INVALID_HANDSHAKE",
+                code: MCPI_ERROR_CODES.handshake_failed,
                 message:
                   "Invalid handshake format: requires nonce (string), audience (string), and timestamp (positive integer)",
               },
@@ -474,7 +475,7 @@ export function createMCPIMiddleware(
               text: JSON.stringify({
                 success: false,
                 error: {
-                  code: "XMCP_I_ENOT_IMPLEMENTED",
+                  code: MCPI_ERROR_CODES.runtime_error,
                   message:
                     'action: "reputation" is not yet implemented.',
                 },
@@ -492,7 +493,7 @@ export function createMCPIMiddleware(
               text: JSON.stringify({
                 success: false,
                 error: {
-                  code: "XMCP_I_EUNKNOWN_ACTION",
+                  code: MCPI_ERROR_CODES.invalid_request,
                   message: `Unknown _mcpi action: "${action ?? "(missing)"}". Valid actions: ${MCPI_ACTIONS.join(", ")}`,
                 },
               }),
@@ -880,7 +881,7 @@ export function createMCPIMiddleware(
           `[mcpi] Delegation verification failed for "${toolName}": ${verificationResult.reason}`,
         );
         return buildDelegationErrorResponse(
-          "delegation_invalid",
+          MCPI_ERROR_CODES.delegation_invalid,
           verificationResult.reason ?? "Unknown delegation validation error",
         );
       }
@@ -891,7 +892,7 @@ export function createMCPIMiddleware(
           `[mcpi] Delegation missing required scope "${config.scopeId}" for "${toolName}"`,
         );
         return buildDelegationErrorResponse(
-          "delegation_scope_missing",
+          MCPI_ERROR_CODES.insufficient_scope,
           `Required scope "${config.scopeId}" not in delegation scopes`,
         );
       }
