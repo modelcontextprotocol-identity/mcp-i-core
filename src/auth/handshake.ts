@@ -23,12 +23,21 @@ export type { DelegationVerifier, VerifyDelegationResult };
 
 export interface AgentReputation {
   agentDid: string;
-  score: number;
+  score: number | null;
   totalInteractions: number;
   successRate: number;
   riskLevel: 'low' | 'medium' | 'high' | 'unknown';
   updatedAt: number;
 }
+
+/**
+ * Policy for handling agents with no reputation history.
+ *
+ * - 'deny'            — reject unknown agents outright (strict environments)
+ * - 'require-consent' — route to the consent/authorization flow (default)
+ * - 'allow'           — let unknown agents through (reputation is advisory only)
+ */
+export type UnknownAgentPolicy = 'deny' | 'require-consent' | 'allow';
 
 export interface AuthHandshakeConfig {
   delegationVerifier: DelegationVerifier;
@@ -41,7 +50,15 @@ export interface AuthHandshakeConfig {
   authorization: {
     authorizationUrl: string;
     resumeTokenTtl?: number;
-    requireAuthForUnknown?: boolean;
+    /**
+     * How to handle agents with no reputation history (404 from reputation
+     * service, network error, or first-time agent).
+     *
+     * - 'deny'            — reject outright
+     * - 'require-consent' — route to consent flow (default)
+     * - 'allow'           — skip reputation gate for unknowns
+     */
+    unknownAgentPolicy?: UnknownAgentPolicy;
     minReputationScore?: number;
   };
   debug?: boolean;
@@ -202,36 +219,85 @@ export async function verifyOrHints(
 
   let reputation: AgentReputation | undefined;
   if (config.reputationService && config.authorization.minReputationScore !== undefined) {
+    const unknownPolicy = config.authorization.unknownAgentPolicy ?? 'require-consent';
+
     try {
       reputation = await fetchAgentReputation(agentDid, config.reputationService);
+    } catch (error) {
+      logger.error('[AuthHandshake] Reputation service unreachable, treating agent as unknown:', error);
+      reputation = {
+        agentDid,
+        score: null,
+        totalInteractions: 0,
+        successRate: 0,
+        riskLevel: 'unknown',
+        updatedAt: Date.now(),
+      };
+    }
 
-      if (config.debug) {
-        logger.debug(`[AuthHandshake] Reputation score: ${reputation.score}`);
-      }
+    if (config.debug) {
+      logger.debug(`[AuthHandshake] Reputation score: ${reputation.score}`);
+    }
 
-      if (reputation.score < config.authorization.minReputationScore) {
-        if (config.debug) {
-          logger.debug(
-            `[AuthHandshake] Reputation ${reputation.score} < ${config.authorization.minReputationScore}, requiring authorization`
-          );
-        }
-
+    // Unknown agent (no reputation data)
+    if (reputation.score === null) {
+      if (unknownPolicy === 'deny') {
         const authError = await buildNeedsAuthorizationError(
           agentDid,
           scopes,
           config,
-          'Agent reputation score below threshold'
+          'Unknown agent denied by policy'
         );
-
         return {
           authorized: false,
           authError,
           reputation,
-          reason: 'Low reputation score',
+          reason: 'Unknown agent — policy: deny',
         };
       }
-    } catch (error) {
-      logger.warn('[AuthHandshake] Failed to check reputation:', error);
+
+      if (unknownPolicy === 'require-consent') {
+        const authError = await buildNeedsAuthorizationError(
+          agentDid,
+          scopes,
+          config,
+          'Unknown agent requires consent'
+        );
+        return {
+          authorized: false,
+          authError,
+          reputation,
+          reason: 'Unknown agent — policy: require-consent',
+        };
+      }
+
+      // unknownPolicy === 'allow' — skip reputation gate, continue to delegation check
+      if (config.debug) {
+        logger.debug('[AuthHandshake] Unknown agent allowed by policy, skipping reputation gate');
+      }
+    }
+
+    // Known agent with score below threshold
+    if (reputation.score !== null && reputation.score < config.authorization.minReputationScore) {
+      if (config.debug) {
+        logger.debug(
+          `[AuthHandshake] Reputation ${reputation.score} < ${config.authorization.minReputationScore}, requiring authorization`
+        );
+      }
+
+      const authError = await buildNeedsAuthorizationError(
+        agentDid,
+        scopes,
+        config,
+        'Agent reputation score below threshold'
+      );
+
+      return {
+        authorized: false,
+        authError,
+        reputation,
+        reason: 'Low reputation score',
+      };
     }
   }
 
@@ -325,7 +391,7 @@ async function fetchAgentReputation(
     if (response.status === 404) {
       return {
         agentDid,
-        score: 50,
+        score: null,
         totalInteractions: 0,
         successRate: 0,
         riskLevel: 'unknown',
@@ -337,7 +403,7 @@ async function fetchAgentReputation(
 
   const data = (await response.json()) as Record<string, unknown>;
 
-  const score = (data['score'] as number | undefined) ?? 50;
+  const score = (data['score'] as number | undefined) ?? 0;
   const levelRaw = (
     (data['level'] as string | undefined) ??
     (data['riskLevel'] as string | undefined) ??

@@ -182,6 +182,7 @@ export {
   type VerifyOrHintsResult,
   type AgentReputation,
   type ResumeTokenStore,
+  type UnknownAgentPolicy,
   type DelegationVerifier,
   type VerifyDelegationResult,
 } from './auth/index.js';
