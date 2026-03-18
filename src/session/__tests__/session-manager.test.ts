@@ -88,7 +88,7 @@ describe("SessionManager", () => {
       const result = await manager.validateHandshake(request);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("XMCP_I_EHANDSHAKE");
+      expect(result.error?.code).toBe("handshake_failed");
     });
 
     it("should accept request within timestamp skew", async () => {
@@ -106,7 +106,7 @@ describe("SessionManager", () => {
       // Same request again (same nonce)
       const second = await manager.validateHandshake(request);
       expect(second.success).toBe(false);
-      expect(second.error?.code).toBe("XMCP_I_EHANDSHAKE");
+      expect(second.error?.code).toBe("handshake_failed");
     });
 
     it("should accept different nonces in succession", async () => {
@@ -261,7 +261,7 @@ describe("SessionManager", () => {
       const result = await sm.validateHandshake(request);
 
       expect(result.success).toBe(false);
-      expect(result.error?.code).toBe("MCPI_AUDIENCE_MISMATCH");
+      expect(result.error?.code).toBe("handshake_failed");
       expect(result.error?.message).toContain("Audience mismatch");
     });
 

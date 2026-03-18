@@ -15,6 +15,14 @@
  * This ensures callers can always handle failures without try/catch on validation paths.
  */
 
+// Error contract
+export {
+  MCPI_ERROR_CODES,
+  createMCPIError,
+  type MCPIErrorCode,
+  type MCPIErrorResponse,
+} from './errors.js';
+
 // Protocol types
 export type {
   DelegationConstraints,

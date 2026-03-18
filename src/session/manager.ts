@@ -9,6 +9,7 @@
  * Cloudflare Workers) to remain synchronous without platform-specific imports.
  */
 
+import { MCPI_ERROR_CODES, type MCPIErrorCode } from "../errors.js";
 import type {
   HandshakeRequest,
   SessionContext,
@@ -32,7 +33,7 @@ export interface HandshakeResult {
   success: boolean;
   session?: SessionContext;
   error?: {
-    code: string;
+    code: MCPIErrorCode;
     message: string;
     remediation?: string;
   };
@@ -94,7 +95,7 @@ export class SessionManager {
         return {
           success: false,
           error: {
-            code: 'XMCP_I_EHANDSHAKE',
+            code: MCPI_ERROR_CODES.handshake_failed,
             message: `Timestamp outside acceptable range (±${this.config.timestampSkewSeconds}s)`,
             remediation: `Check NTP sync on client and server. Current server time: ${now}, received: ${request.timestamp}, diff: ${timeDiff}s. Adjust timestampSkewSeconds if needed.`,
           },
@@ -106,7 +107,7 @@ export class SessionManager {
         return {
           success: false,
           error: {
-            code: 'MCPI_AUDIENCE_MISMATCH',
+            code: MCPI_ERROR_CODES.handshake_failed,
             message: `Audience mismatch: expected ${this.config.serverDid}, got ${request.audience}`,
           },
         };
@@ -120,7 +121,7 @@ export class SessionManager {
         return {
           success: false,
           error: {
-            code: 'XMCP_I_EHANDSHAKE',
+            code: MCPI_ERROR_CODES.handshake_failed,
             message: 'Nonce already used (replay attack prevention)',
             remediation: 'Generate a new unique nonce for each request',
           },
@@ -160,7 +161,7 @@ export class SessionManager {
       return {
         success: false,
         error: {
-          code: 'XMCP_I_EHANDSHAKE',
+          code: MCPI_ERROR_CODES.handshake_failed,
           message: `Handshake validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         },
       };
