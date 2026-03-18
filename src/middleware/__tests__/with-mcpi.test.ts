@@ -24,7 +24,7 @@ async function createTestMiddleware(options?: {
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#keys-1`;
+  const kid = `${did}#${did.replace('did:key:', '')}`;
 
   const middleware = createMCPIMiddleware(
     {
@@ -43,7 +43,7 @@ async function createDelegationIssuer(options?: { did?: string; kid?: string }) 
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = options?.did ?? generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = options?.kid ?? `${did}#keys-1`;
+  const kid = options?.kid ?? `${did}#${did.replace('did:key:', '')}`;
 
   const signingFn = async (
     canonicalVC: string,
@@ -172,7 +172,7 @@ describe('createMCPIMiddleware', () => {
       expect(result.isError).toBeUndefined();
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.did).toBe(did);
-      expect(parsed.kid).toContain('#keys-1');
+      expect(parsed.kid).toMatch(/#z[\w]+$/);
       expect(parsed.capabilities).toContain('handshake');
       expect(parsed.capabilities).toContain('signing');
       expect(parsed.capabilities).toContain('verification');

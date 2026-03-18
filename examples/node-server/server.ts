@@ -126,7 +126,7 @@ async function main() {
   const keyPair = await crypto.generateKeyPair();
 
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  const kid = `${did}#keys-1`;
+  const kid = `${did}#${did.replace('did:key:', '')}`;
 
   console.error(`[mcpi] Agent DID: ${did}`);
 

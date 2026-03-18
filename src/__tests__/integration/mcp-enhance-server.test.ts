@@ -335,7 +335,7 @@ describe('generateIdentity()', () => {
     const identity = await generateIdentity(crypto);
 
     expect(identity.did).toMatch(/^did:key:z6Mk/);
-    expect(identity.kid).toBe(`${identity.did}#keys-1`);
+    expect(identity.kid).toBe(`${identity.did}#${identity.did.replace('did:key:', '')}`);
     expect(identity.privateKey).toBeDefined();
     expect(identity.publicKey).toBeDefined();
     // Keys should be base64 strings

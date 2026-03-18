@@ -155,7 +155,7 @@ describe('Base Provider Classes', () => {
     it('should have proper type structure', () => {
       const validIdentity = {
         did: 'did:key:z123',
-        kid: 'did:key:z123#keys-1',
+        kid: 'did:key:z123#z123',
         privateKey: 'private-key',
         publicKey: 'public-key',
         createdAt: new Date().toISOString(),

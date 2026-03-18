@@ -22,7 +22,7 @@ describe('createDelegationIssuerFromIdentity', () => {
   beforeAll(async () => {
     const keyPair = await crypto.generateKeyPair();
     const did = generateDidKeyFromBase64(keyPair.publicKey);
-    const kid = `${did}#keys-1`;
+    const kid = `${did}#${did.replace('did:key:', '')}`;
 
     factory = createDelegationIssuerFromIdentity(crypto, {
       did,
@@ -104,6 +104,6 @@ describe('createDelegationIssuerFromIdentity', () => {
   it('should return the identity in the factory', () => {
     expect(factory.identity.did).toBeDefined();
     expect(factory.identity.did.startsWith('did:key:')).toBe(true);
-    expect(factory.identity.kid).toContain('#keys-1');
+    expect(factory.identity.kid).toMatch(/#z[\w]+$/);
   });
 });

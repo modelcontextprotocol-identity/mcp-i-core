@@ -19,8 +19,8 @@ async function main() {
   const crypto = new NodeCryptoProvider();
   const keyPair = await crypto.generateKeyPair();
   const did = generateDidKeyFromBase64(keyPair.publicKey);
-  // Use #keys-1 to match the did-key-resolver verification method ID
-  const kid = `${did}#keys-1`;
+  
+  const kid = `${did}#${did.replace('did:key:', '')}`;
 
   process.stderr.write(`[issue-delegation] Issuer DID: ${did}\n`);
 

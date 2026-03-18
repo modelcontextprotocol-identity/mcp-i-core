@@ -12,7 +12,7 @@
  */
 
 import type { CryptoProvider } from "../providers/base.js";
-import { generateDidKeyFromBase64 } from "../utils/did-helpers.js";
+import { generateDidKeyFromBase64, didKeyFragment } from "../utils/did-helpers.js";
 import {
   MCPI_ACTIONS,
   createMCPIMiddleware,
@@ -59,7 +59,7 @@ export async function generateIdentity(
   const did = generateDidKeyFromBase64(keyPair.publicKey);
   return {
     did,
-    kid: `${did}#keys-1`,
+    kid: `${did}#${didKeyFragment(did)}`,
     privateKey: keyPair.privateKey,
     publicKey: keyPair.publicKey,
   };

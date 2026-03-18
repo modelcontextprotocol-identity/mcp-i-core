@@ -28,7 +28,7 @@ beforeAll(async () => {
 
   serverKeyPair = await cryptoProvider.generateKeyPair();
   serverDid = generateDidKeyFromBase64(serverKeyPair.publicKey);
-  serverKid = `${serverDid}#keys-1`;
+  serverKid = `${serverDid}#${serverDid.replace('did:key:', '')}`;
 
   const agentKeyPair = await cryptoProvider.generateKeyPair();
   agentDid = generateDidKeyFromBase64(agentKeyPair.publicKey);

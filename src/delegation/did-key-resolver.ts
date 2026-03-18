@@ -15,6 +15,7 @@
  */
 
 import { base58Decode } from '../utils/base58.js';
+import { didKeyFragment } from '../utils/did-helpers.js';
 import { base64urlEncodeFromBytes } from '../utils/base64.js';
 import type { DIDResolver, DIDDocument, VerificationMethod } from './vc-verifier.js';
 import { logger } from '../logging/index.js';
@@ -124,8 +125,10 @@ export function createDidKeyResolver(): DIDResolver {
       const multibaseKey = did.replace('did:key:', '');
 
       // Construct the verification method
+      const fragment = didKeyFragment(did);
+
       const verificationMethod: VerificationMethod = {
-        id: `${did}#keys-1`,
+        id: `${did}#${fragment}`,
         type: 'Ed25519VerificationKey2020',
         controller: did,
         publicKeyJwk,
@@ -136,8 +139,8 @@ export function createDidKeyResolver(): DIDResolver {
       return {
         id: did,
         verificationMethod: [verificationMethod],
-        authentication: [`${did}#keys-1`],
-        assertionMethod: [`${did}#keys-1`],
+        authentication: [`${did}#${fragment}`],
+        assertionMethod: [`${did}#${fragment}`],
       };
     },
   };
@@ -164,8 +167,10 @@ export function resolveDidKeySync(did: string): DIDDocument | null {
   const publicKeyJwk = publicKeyToJwk(publicKeyBytes);
   const multibaseKey = did.replace('did:key:', '');
 
+  const fragment = didKeyFragment(did);
+
   const verificationMethod: VerificationMethod = {
-    id: `${did}#keys-1`,
+    id: `${did}#${fragment}`,
     type: 'Ed25519VerificationKey2020',
     controller: did,
     publicKeyJwk,
@@ -175,7 +180,7 @@ export function resolveDidKeySync(did: string): DIDDocument | null {
   return {
     id: did,
     verificationMethod: [verificationMethod],
-    authentication: [`${did}#keys-1`],
-    assertionMethod: [`${did}#keys-1`],
+    authentication: [`${did}#${fragment}`],
+    assertionMethod: [`${did}#${fragment}`],
   };
 }

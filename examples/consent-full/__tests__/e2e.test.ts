@@ -29,7 +29,7 @@ describe('E2E: consent -> delegation -> execution', () => {
     // 1. Create MCP middleware with fresh identity
     const keyPair = await crypto.generateKeyPair();
     const did = generateDidKeyFromBase64(keyPair.publicKey);
-    const kid = `${did}#keys-1`;
+    const kid = `${did}#${did.replace('did:key:', '')}`;
 
     mcpi = createMCPIMiddleware(
       {

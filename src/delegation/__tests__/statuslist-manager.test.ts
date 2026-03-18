@@ -59,7 +59,7 @@ describe("StatusList2021Manager", () => {
     proof: {
       type: "Ed25519Signature2020",
       created: new Date().toISOString(),
-      verificationMethod: "did:key:z6MkIssuer#keys-1",
+      verificationMethod: "did:key:z6MkIssuer#z6MkIssuer",
       proofPurpose: "assertionMethod",
       proofValue: "mock-proof-value",
     },
@@ -74,13 +74,13 @@ describe("StatusList2021Manager", () => {
 
     mockIdentity = {
       getDid: vi.fn().mockReturnValue("did:key:z6MkTestIssuer"),
-      getKeyId: vi.fn().mockReturnValue("did:key:z6MkTestIssuer#keys-1"),
+      getKeyId: vi.fn().mockReturnValue("did:key:z6MkTestIssuer#z6MkTestIssuer"),
     };
 
     mockSigningFunction = vi.fn().mockResolvedValue({
       type: "Ed25519Signature2020",
       created: new Date().toISOString(),
-      verificationMethod: "did:key:z6MkTestIssuer#keys-1",
+      verificationMethod: "did:key:z6MkTestIssuer#z6MkTestIssuer",
       proofPurpose: "assertionMethod",
       proofValue: "mock-signature",
     });
