@@ -267,3 +267,12 @@ export {
   ED25519_SPKI_DER_HEADER_LENGTH,
   ED25519_KEY_SIZE,
 } from './utils/index.js';
+
+// Client Helper
+export {
+  MCPIClientHelper,
+  type MCPIClientConfig,
+  type MCPIHandshakeResult,
+  type MCPIToolResult,
+  type MCPClientLike,
+} from './client/mcpi-client.js';
