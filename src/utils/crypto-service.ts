@@ -6,6 +6,7 @@
  */
 
 import { CryptoProvider } from '../providers/base.js';
+import { logger } from '../logging/index.js';
 import {
   base64urlDecodeToString,
   base64urlDecodeToBytes,
@@ -43,7 +44,7 @@ export class CryptoService {
       const result = await this.cryptoProvider.verify(data, signature, publicKey);
       return result === true;
     } catch (error) {
-      console.error('[CryptoService] Ed25519 verification error:', error);
+      logger.error('[CryptoService] Ed25519 verification error:', error);
       return false;
     }
   }
@@ -101,12 +102,12 @@ export class CryptoService {
   ): Promise<boolean> {
     try {
       if (!this.isValidEd25519JWK(publicKeyJwk)) {
-        console.error('[CryptoService] Invalid Ed25519 JWK format');
+        logger.error('[CryptoService] Invalid Ed25519 JWK format');
         return false;
       }
 
       if (options?.expectedKid && publicKeyJwk.kid !== options.expectedKid) {
-        console.error('[CryptoService] Key ID mismatch');
+        logger.error('[CryptoService] Key ID mismatch');
         return false;
       }
 
@@ -126,22 +127,22 @@ export class CryptoService {
               const signatureBytes = base64urlDecodeToBytes(signatureB64);
               parsed = { header, payload: undefined, signatureBytes, signingInput: '' };
             } catch {
-              console.error('[CryptoService] Invalid detached JWS format');
+              logger.error('[CryptoService] Invalid detached JWS format');
               return false;
             }
           } else {
-            console.error('[CryptoService] Invalid JWS format:', error);
+            logger.error('[CryptoService] Invalid JWS format:', error);
             return false;
           }
         } else {
-          console.error('[CryptoService] Invalid JWS format:', error);
+          logger.error('[CryptoService] Invalid JWS format:', error);
           return false;
         }
       }
 
       const expectedAlg = options?.alg || 'EdDSA';
       if (parsed.header['alg'] !== expectedAlg) {
-        console.error(
+        logger.error(
           `[CryptoService] Unsupported algorithm: ${parsed.header['alg']}, expected ${expectedAlg}`
         );
         return false;
@@ -164,7 +165,7 @@ export class CryptoService {
         signingInputBytes = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
       } else {
         if (!parsed.signingInput) {
-          console.error('[CryptoService] Missing signing input for compact JWS');
+          logger.error('[CryptoService] Missing signing input for compact JWS');
           return false;
         }
         signingInputBytes = new TextEncoder().encode(parsed.signingInput);
@@ -174,13 +175,13 @@ export class CryptoService {
       try {
         publicKeyBase64 = this.jwkToBase64PublicKey(publicKeyJwk);
       } catch (error) {
-        console.error('[CryptoService] Failed to extract public key:', error);
+        logger.error('[CryptoService] Failed to extract public key:', error);
         return false;
       }
 
       return await this.verifyEd25519(signingInputBytes, parsed.signatureBytes, publicKeyBase64);
     } catch (error) {
-      console.error('[CryptoService] JWS verification error:', error);
+      logger.error('[CryptoService] JWS verification error:', error);
       return false;
     }
   }

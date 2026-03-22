@@ -179,6 +179,7 @@ export {
   extractAgentSlug,
   generateDidKeyFromBytes,
   generateDidKeyFromBase64,
+  didKeyFragment,
 } from './utils/did-helpers.js';
 
 // Auth module
