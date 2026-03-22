@@ -1,0 +1,16 @@
+{
+  "content": [
+    { "type": "text", "text": "72°F and sunny in London" }
+  ],
+  "_meta": {
+    "proof": {
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa2hh...",
+      "meta": {
+        "did": "did:key:z6MkhaXgBZhvQKpr3aCn5gVRemSmRYPXwCFmYLcud7QejHB",
+        "tool": "get_weather",
+        "sessionId": "sess_a1b2c3",
+        "timestamp": "2026-03-22T22:15:00Z"
+      }
+    }
+  }
+}
