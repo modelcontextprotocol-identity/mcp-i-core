@@ -405,7 +405,7 @@ describe("StatusList2021Manager", () => {
       expect(isRevoked).toBe(true);
     });
 
-    it("should return false if status list doesn't exist", async () => {
+    it("should throw if status list doesn't exist (fail closed)", async () => {
       const manager = new StatusList2021Manager(
         mockStorage,
         mockIdentity,
@@ -424,9 +424,9 @@ describe("StatusList2021Manager", () => {
         statusListCredential: "https://status.example.com/revocation/v1",
       };
 
-      const isRevoked = await manager.checkStatus(credentialStatus);
-
-      expect(isRevoked).toBe(false);
+      await expect(
+        manager.checkStatus(credentialStatus)
+      ).rejects.toThrow("Status list not found");
     });
   });
 
@@ -510,6 +510,119 @@ describe("StatusList2021Manager", () => {
 
       expect(manager).toBeInstanceOf(StatusList2021Manager);
       expect(manager.getStatusListBaseUrl()).toBe("https://status.example.com");
+    });
+  });
+
+  describe("checkStatus fail-closed behavior", () => {
+    it("should throw with the status list URL in the error message", async () => {
+      const manager = new StatusList2021Manager(
+        mockStorage,
+        mockIdentity,
+        mockSigningFunction,
+        mockCompressor,
+        mockDecompressor
+      );
+
+      vi.mocked(mockStorage.getStatusList).mockResolvedValue(null);
+
+      const statusListUrl = "https://status.example.com/revocation/v1";
+      const credentialStatus: CredentialStatus = {
+        id: `${statusListUrl}#5`,
+        type: "StatusList2021Entry",
+        statusPurpose: "revocation",
+        statusListIndex: "5",
+        statusListCredential: statusListUrl,
+      };
+
+      await expect(manager.checkStatus(credentialStatus)).rejects.toThrow(
+        statusListUrl
+      );
+    });
+
+    it("should throw when storage provider rejects", async () => {
+      const manager = new StatusList2021Manager(
+        mockStorage,
+        mockIdentity,
+        mockSigningFunction,
+        mockCompressor,
+        mockDecompressor
+      );
+
+      vi.mocked(mockStorage.getStatusList).mockRejectedValue(
+        new Error("Redis connection refused")
+      );
+
+      const credentialStatus: CredentialStatus = {
+        id: "https://status.example.com/revocation/v1#5",
+        type: "StatusList2021Entry",
+        statusPurpose: "revocation",
+        statusListIndex: "5",
+        statusListCredential: "https://status.example.com/revocation/v1",
+      };
+
+      await expect(manager.checkStatus(credentialStatus)).rejects.toThrow(
+        "Redis connection refused"
+      );
+    });
+
+    it("should still return false for non-revoked credential with valid storage", async () => {
+      const manager = new StatusList2021Manager(
+        mockStorage,
+        mockIdentity,
+        mockSigningFunction,
+        mockCompressor,
+        mockDecompressor
+      );
+
+      const statusListId = "https://status.example.com/revocation/v1";
+      const existingCredential = createStatusListCredential(
+        statusListId,
+        "revocation"
+      );
+      vi.mocked(mockStorage.getStatusList).mockResolvedValue(existingCredential);
+
+      const credentialStatus: CredentialStatus = {
+        id: `${statusListId}#3`,
+        type: "StatusList2021Entry",
+        statusPurpose: "revocation",
+        statusListIndex: "3",
+        statusListCredential: statusListId,
+      };
+
+      const isRevoked = await manager.checkStatus(credentialStatus);
+      expect(isRevoked).toBe(false);
+    });
+
+    it("should still return true for revoked credential with valid storage", async () => {
+      const manager = new StatusList2021Manager(
+        mockStorage,
+        mockIdentity,
+        mockSigningFunction,
+        mockCompressor,
+        mockDecompressor
+      );
+
+      const statusListId = "https://status.example.com/revocation/v1";
+      const bytes = new Uint8Array(2);
+      bytes[0] = 0b00001000; // Bit 3 set
+      const encodedList = Buffer.from(bytes).toString("base64url");
+      const existingCredential = createStatusListCredential(
+        statusListId,
+        "revocation",
+        encodedList
+      );
+      vi.mocked(mockStorage.getStatusList).mockResolvedValue(existingCredential);
+
+      const credentialStatus: CredentialStatus = {
+        id: `${statusListId}#3`,
+        type: "StatusList2021Entry",
+        statusPurpose: "revocation",
+        statusListIndex: "3",
+        statusListCredential: statusListId,
+      };
+
+      const isRevoked = await manager.checkStatus(credentialStatus);
+      expect(isRevoked).toBe(true);
     });
   });
 });

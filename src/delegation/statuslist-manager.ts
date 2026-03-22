@@ -112,7 +112,9 @@ export class StatusList2021Manager {
 
     const statusList = await this.storage.getStatusList(statusListCredential);
     if (!statusList) {
-      return false;
+      throw new Error(
+        `Status list not found: ${statusListCredential} — cannot determine revocation status`
+      );
     }
 
     const manager = await BitstringManager.decode(

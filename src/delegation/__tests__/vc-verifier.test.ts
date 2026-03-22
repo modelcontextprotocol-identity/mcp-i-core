@@ -1027,4 +1027,45 @@ describe("DelegationCredentialVerifier", () => {
       });
     });
   });
+
+  describe("E2E: StatusList2021 missing storage → verifier rejects", () => {
+    it("should return valid: false when status list resolver throws (missing storage)", async () => {
+      await setupDefaultContractsMocks();
+      const vcWithStatus = {
+        ...mockValidVC,
+        credentialStatus: {
+          id: "https://example.com/status#123",
+          type: "StatusList2021Entry" as const,
+          statusPurpose: "revocation" as const,
+          statusListIndex: "123",
+          statusListCredential: "https://example.com/status",
+        },
+      };
+
+      mockDidResolver.resolve.mockResolvedValue({
+        id: "did:web:example.com:issuer",
+        verificationMethod: [
+          {
+            id: "did:web:example.com:issuer#key-1",
+            type: "Ed25519VerificationKey2020",
+            controller: "did:web:example.com:issuer",
+            publicKeyJwk: { kty: "OKP", crv: "Ed25519", x: "mock-key" },
+          },
+        ],
+      });
+      mockSignatureVerifier.mockResolvedValue({ valid: true });
+
+      // Simulate StatusList2021Manager.checkStatus throwing on missing storage
+      mockStatusListResolver.checkStatus.mockRejectedValue(
+        new Error("Status list not found: https://example.com/status — cannot determine revocation status")
+      );
+
+      const result = await verifier.verifyDelegationCredential(vcWithStatus);
+
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("Status list not found");
+      expect(result.reason).toContain("cannot determine revocation status");
+      expect(result.checks?.statusValid).toBe(false);
+    });
+  });
 });
