@@ -5,7 +5,7 @@ Set Height 580
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 40ms
 Set Padding 20
-Set Shell "bash --rcfile demo-env.sh"
+Set Shell "./demo-shell.sh"
 
 Sleep 500ms
 
