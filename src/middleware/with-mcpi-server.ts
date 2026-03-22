@@ -66,14 +66,16 @@ export async function generateIdentity(
 }
 
 /**
- * McpServer type — minimal interface to avoid hard dependency on the SDK.
- * Matches the public API of @modelcontextprotocol/sdk McpServer.
+ * Minimal McpServer interface — avoids hard dependency on @modelcontextprotocol/sdk.
+ * Matches the subset of McpServer's public API that withMCPI() uses.
  */
 interface McpServerLike {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  connect(transport: Transport): Promise<any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  registerTool(...args: any[]): void;
+  connect(transport: Transport): Promise<unknown>;
+  registerTool(
+    name: string,
+    config: Record<string, unknown>,
+    handler: (args: unknown) => Promise<unknown>,
+  ): void;
 }
 
 /**
