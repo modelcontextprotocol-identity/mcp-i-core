@@ -9,7 +9,10 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@mcp-i/core": ["../../src/index.ts"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]
