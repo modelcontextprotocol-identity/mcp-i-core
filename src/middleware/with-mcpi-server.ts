@@ -71,11 +71,7 @@ export async function generateIdentity(
  */
 interface McpServerLike {
   connect(transport: Transport): Promise<unknown>;
-  registerTool(
-    name: string,
-    config: Record<string, unknown>,
-    handler: (args: unknown) => Promise<unknown>,
-  ): void;
+  registerTool(...args: unknown[]): void;
 }
 
 /**
