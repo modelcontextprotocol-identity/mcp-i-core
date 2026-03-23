@@ -5,9 +5,14 @@ Set Height 580
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 40ms
 Set Padding 20
-Set Shell "./demo-shell.sh"
+Set Shell "bash"
 
+# Source mock env (hidden — happens before any visible typing)
+Hide
+Type "source demo-env.sh"
+Enter
 Sleep 500ms
+Show
 
 # ── Step 1: Install ──────────────────────────────────────
 Type "npm install @mcp-i/core"
