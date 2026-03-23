@@ -30,8 +30,7 @@ import { AsyncLocalStorage } from "async_hooks";
 import { SERVER_VERSION, RESOURCE_URL, AUTH_SERVER_URL } from "./lib/constants.js";
 
 // ── MCP-I imports ──────────────────────────────────────────────────
-import { withMCPI } from '../../../src/middleware/with-mcpi-server.js';
-import { NodeCryptoProvider } from '../../node-server/node-crypto.js';
+import { withMCPI, NodeCryptoProvider } from '@mcp-i/core';
 
 /** Default HTTP server port */
 const DEFAULT_PORT = 3000;

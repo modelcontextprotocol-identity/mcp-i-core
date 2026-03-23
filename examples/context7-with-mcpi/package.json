@@ -10,7 +10,8 @@
     "start:http": "npx tsx src/index.ts --transport http"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.1",
+    "@mcp-i/core": "^1.1.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "commander": "^14.0.0",
     "express": "^5.1.0",
     "jose": "^6.1.3",
