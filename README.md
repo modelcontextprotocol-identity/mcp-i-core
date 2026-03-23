@@ -1,4 +1,4 @@
-# @mcp-i/core
+# @mcp-i/core — The missing trust layer for MCP
 
 [![CI](https://github.com/modelcontextprotocol-identity/mcp-i-core/actions/workflows/ci.yml/badge.svg)](https://github.com/modelcontextprotocol-identity/mcp-i-core/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@mcp-i/core)](https://www.npmjs.com/package/@mcp-i/core)
@@ -12,15 +12,14 @@ MCP gave AI agents a universal way to discover and use tools. But it didn't solv
 
 `@mcp-i/core` adds the missing trust layer. Every tool call answers three questions:
 
-- **Who is calling?** Cryptographic identity via [Decentralized Identifiers](https://www.w3.org/TR/did-core/) (DIDs)
-- **Are they allowed?** Delegated authorization via [W3C Verifiable Credentials](https://www.w3.org/TR/vc-data-model-2.0/)
-- **What happened?** Signed proofs (detached JWS) on every response
+| | Without MCP-I | With MCP-I |
+|---|---|---|
+| **Who is calling?** | Unknown — shared API key across all agents | Cryptographic identity via [DIDs](https://www.w3.org/TR/did-core/) (`did:key:z6Mk...`) |
+| **Are they allowed?** | No way to tell — key has full access | Scoped [Verifiable Credential](https://www.w3.org/TR/vc-data-model-2.0/) from a human approver |
+| **What happened?** | Logs show `API_KEY_PROD` made the call | Signed proof (JWS) — tamper-evident audit trail |
+| **Revoke one agent?** | Rotate the key. Break everyone. | One call. No one else affected. |
 
 No central authority. No shared API keys. The math proves it.
-
-<p align="center">
-  <img src="./demo-quickstart/visuals/before-after-new.png" alt="Before and after MCP-I" width="700" />
-</p>
 
 > **Open standard.** MCP-I is governed by the [DIF Trusted AI Agents Working Group](https://identity.foundation/working-groups/agent-and-authorization.html). Spec and docs: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io/introduction)
 
@@ -111,36 +110,59 @@ const placeOrder = mcpi.wrapWithDelegation(
 
 Public tools get proofs automatically. Sensitive tools get proofs **and** require delegation. Your server, your rules.
 
-<p align="center">
-  <img src="./demo-quickstart/visuals/rendered/tool-protection.png" alt="Tool protection flow" width="600" />
-</p>
+```mermaid
+flowchart LR
+    A[Agent calls tool] --> B{What kind of tool?}
+    B -- Public --> C[search] --> D[Execute] --> E[Response + proof]
+    B -- Protected --> F[place_order] --> G{Has delegation VC?}
+    G -- No --> H[needs_authorization] --> I[Human approves] --> J[VC issued]
+    G -- Yes --> K[Verify VC] --> L[Execute] --> M[Response + proof]
+```
 
 ---
 
 ## How it works
 
-```
-Agent (did:key:z6Mk...)             MCP-I Server (did:key:z6Mn...)
-        │                                      │
-        ├── handshake (exchange DIDs) ────────>│
-        │<──────────── server identity confirmed│
-        │                                      │
-        ├── call protected tool ──────────────>│
-        │<──── needs_authorization + consent URL│
-        │                                      │
-        │  Human approves → delegation VC issued│
-        │                                      │
-        ├── retry tool + delegation VC ───────>│  verify chain
-        │<──────── response + signed proof (JWS)│  ✓ execute
+```mermaid
+sequenceDiagram
+    participant Agent as Agent (did:key:z6Mk...)
+    participant Server as MCP-I Server (did:key:z6Mn...)
+    participant Human
+
+    Note over Agent,Server: 1. Identity — Ed25519 key pairs, no registration
+    Agent->>Server: Handshake (exchange DIDs)
+    Server-->>Agent: Server identity confirmed
+
+    Note over Agent,Server: 2. Delegation — scoped, time-limited, tamper-proof
+    Agent->>Server: Call protected tool
+    Server-->>Agent: needs_authorization + consent URL
+    Agent->>Human: Redirect to consent page
+    Human-->>Server: Approve → delegation VC issued
+
+    Note over Agent,Server: 3. Proof — detached JWS over canonical response
+    Agent->>Server: Retry tool + delegation VC
+    Server->>Server: Verify VC chain → execute
+    Server-->>Agent: Response + signed proof (JWS)
 ```
 
 1. **Identity.** Both sides generate Ed25519 key pairs, producing `did:key` identifiers. No registration required.
 2. **Delegation.** Protected tools require a Verifiable Credential: a signed, scoped, time-limited permission from a human. Tamper with it and the signature breaks.
 3. **Proof.** Every tool response includes a detached JWS signature over the canonical response. The caller can independently verify the response hasn't been modified.
 
-<p align="center">
-  <img src="./demo-quickstart/visuals/rendered/proof-annotated.svg.png" alt="Annotated _meta.proof structure" width="700" />
-</p>
+The proof is a standard detached JWS attached to `_meta.proof` in every response:
+
+```json
+{
+  "_meta": {
+    "proof": {
+      "type": "Ed25519Signature2020",
+      "created": "2025-01-15T14:32:00Z",
+      "verificationMethod": "did:key:z6Mn...#z6Mn...",
+      "proofValue": "eyJhbGciOiJFZERTQSIs..."
+    }
+  }
+}
+```
 
 ---
 
