@@ -1,203 +1,131 @@
-# @mcp-i/core
+<p align="center">
+  <a href="https://modelcontextprotocol-identity.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://modelcontextprotocol-identity.io/images/logo-mark_white.svg">
+      <img alt="MCP-I" src="https://modelcontextprotocol-identity.io/images/logo-mark_black.svg" width="360">
+    </picture>
+  </a>
+</p>
 
-**Identity, delegation, and proof for the Model Context Protocol.**
+<p align="center">
+  <strong>Identity, delegation, and proof for the Model Context Protocol.</strong>
+</p>
 
-MCP-I answers three questions for every AI agent tool call: *who* is calling (DID), *are they allowed* (delegation VC), and *what happened* (signed proof). It uses W3C Verifiable Credentials, Ed25519 signatures, and Decentralized Identifiers — no central authority required.
-
-> [DIF TAAWG](https://identity.foundation/working-groups/agent-and-authorization.html) protocol reference implementation. Spec: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io)
-
----
-
-## Try It
-
-See the consent flow in action — an agent calls a protected tool, a human approves, and the agent retries with a signed credential:
-
-```bash
-git clone https://github.com/modelcontextprotocol-identity/mcp-i-core.git
-cd mcp-i-core
-pnpm install
-npx tsx examples/consent-basic/src/server.ts
-```
-
-Then connect with [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
-
-```bash
-npx @modelcontextprotocol/inspector
-# → Connect to http://localhost:3002/sse
-```
-
-Call `checkout` — you'll get a consent link. Open it, approve, then retry the tool. [Full walkthrough →](./examples/consent-basic/README.md)
+<p align="center">
+  <a href="https://www.npmjs.com/package/@mcp-i/core"><img src="https://img.shields.io/npm/v/@mcp-i/core" alt="npm"></a>
+  <a href="https://modelcontextprotocol-identity.io"><img src="https://img.shields.io/badge/spec-modelcontextprotocol--identity.io-blue" alt="spec"></a>
+  <a href="https://identity.foundation/working-groups/agent-and-authorization.html"><img src="https://img.shields.io/badge/DIF-TAAWG-purple" alt="DIF TAAWG"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/modelcontextprotocol-identity/mcp-i-core" alt="license"></a>
+</p>
 
 ---
 
-## Add to Your Server
+AI agents call tools on your behalf. But today, there's no way to know *who* called, *whether they were allowed to*, or *what actually happened*. MCP-I fixes that.
 
-One line to add identity, sessions, and proofs to any MCP server:
+- **Every server gets a cryptographic identity** (DID) — no accounts, no API keys, no central registry
+- **Every tool call gets a signed proof** — a tamper-evident receipt the agent can't forge or deny
+- **Protected tools require human consent** — per-tool authorization via W3C Delegation Credentials
+- **The AI never knows** — identity, proofs, and consent happen transparently in the protocol layer
+
+```
+npm install @mcp-i/core
+```
+
+---
+
+## Migrate Any MCP Server in 2 Lines
+
+**Before** — a standard MCP server with no identity or proofs:
 
 ```typescript
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { withMCPI, NodeCryptoProvider } from '@mcp-i/core';
 
 const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-await withMCPI(server, { crypto: new NodeCryptoProvider() });
 
-// Register tools normally — proofs are attached automatically
-```
-
-Default behavior is compatibility-first:
-- `withMCPI` auto-registers `_mcpi`, so it appears in MCP Inspector and tool lists.
-- Handshake is not tied to MCP `initialize`; a client/runtime must call it (or use `autoSession`).
-
-If your runtime has a native connection/auth handshake hook, disable tool exposure and call middleware directly:
-
-```typescript
-const mcpi = await withMCPI(server, {
-  crypto: new NodeCryptoProvider(),
-  handshakeExposure: 'none',
-  autoSession: false,
-});
-
-// In your runtime's connection handshake hook:
-await mcpi.handleMCPI({
-  action: 'handshake',
-  nonce: 'client-generated-nonce',
-  audience: mcpi.identity.did,
-  timestamp: Math.floor(Date.now() / 1000),
-  agentDid: 'did:key:...optional...',
-});
-```
-
-Every tool response now includes a cryptographic proof. For protected tools that require human consent, add `wrapWithDelegation`:
-
-```typescript
-import { createMCPIMiddleware, generateIdentity, NodeCryptoProvider } from '@mcp-i/core';
-
-const crypto = new NodeCryptoProvider();
-const identity = await generateIdentity(crypto);
-const mcpi = createMCPIMiddleware({ identity, session: { sessionTtlMinutes: 60 } }, crypto);
-
-// Public tool — proof attached automatically
-const search = mcpi.wrapWithProof('search', async (args) => ({
-  content: [{ type: 'text', text: `Results for: ${args['query']}` }],
+server.registerTool('greet', { description: 'Say hello' }, async (args) => ({
+  content: [{ type: 'text', text: `Hello, ${args.name}!` }],
 }));
+```
 
-// Protected tool — requires delegation with scope 'orders:write'
-const placeOrder = mcpi.wrapWithDelegation(
-  'place_order',
-  { scopeId: 'orders:write', consentUrl: 'https://example.com/consent' },
-  mcpi.wrapWithProof('place_order', async (args) => ({
-    content: [{ type: 'text', text: `Order placed: ${args['item']}` }],
+**After** — every tool response now carries a signed cryptographic proof:
+
+```typescript
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { withMCPI, NodeCryptoProvider } from '@mcp-i/core';  // +1 line
+
+const server = new McpServer({ name: 'my-server', version: '1.0.0' });
+await withMCPI(server, { crypto: new NodeCryptoProvider() }); // +1 line
+
+server.registerTool('greet', { description: 'Say hello' }, async (args) => ({
+  content: [{ type: 'text', text: `Hello, ${args.name}!` }],
+}));
+```
+
+That's it. `withMCPI` auto-generates an Ed25519 identity, registers the `_mcpi` protocol tool, and wraps the transport so every tool response includes a detached JWS proof in `_meta` — invisible to the LLM, verifiable by anyone.
+
+> See the full working example: [examples/context7-with-mcpi](./examples/context7-with-mcpi/) — a real MCP server (Context7) migrated with exactly 2 lines of code.
+
+---
+
+## Protect Tools with Human Consent
+
+Some tools shouldn't run without a human saying "yes." MCP-I adds per-tool authorization using W3C Verifiable Credentials:
+
+```typescript
+const checkout = mcpi.wrapWithDelegation(
+  'checkout',
+  { scopeId: 'cart:write', consentUrl: 'https://example.com/consent' },
+  mcpi.wrapWithProof('checkout', async (args) => ({
+    content: [{ type: 'text', text: `Order placed: ${args.item}` }],
   })),
 );
 ```
 
+When an agent calls `checkout` without a delegation credential, it gets back a `needs_authorization` response with a consent URL. The human approves, a scoped credential is issued, and the agent retries — now authorized.
+
+> Try it yourself: [examples/consent-basic](./examples/consent-basic/) walks through the full consent flow end-to-end.
+
 ---
 
-## Install
+## See It in Action
 
 ```bash
-npm install @mcp-i/core
+git clone https://github.com/modelcontextprotocol-identity/mcp-i-core.git
+cd mcp-i-core && npm install
+bash scripts/demo.sh
 ```
 
-Requires Node.js 20+. Peer dependency on `@modelcontextprotocol/sdk` (optional — only needed for `withMCPI`).
+This starts all example servers and opens [MCP Inspector](https://github.com/modelcontextprotocol/inspector). Connect to any server, call a tool, and inspect the proof in `_meta`:
+
+| Port | Example | What it demonstrates |
+|------|---------|---------------------|
+| 3001 | [node-server](./examples/node-server/) | Proofs + restricted tools (low-level API) |
+| 3002 | [consent-basic](./examples/consent-basic/) | Human consent flow with built-in UI |
+| 3003 | [consent-full](./examples/consent-full/) | Production consent UI ([@kya-os/consent](https://www.npmjs.com/package/@kya-os/consent)) |
+| 3004 | [context7-with-mcpi](./examples/context7-with-mcpi/) | 2-line migration of a real MCP server |
+
+Also available: [outbound-delegation](./examples/outbound-delegation/) (gateway pattern), [verify-proof](./examples/verify-proof/) (standalone verification), [statuslist](./examples/statuslist/) (revocation lifecycle).
 
 ---
 
-## Architecture
+## What's Under the Hood
 
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Agent      │────▶│  MCP Server  │────▶│  Downstream  │
-│  (did:key)   │     │  + MCP-I     │     │  Services    │
-└─────────────┘     └──────────────┘     └─────────────┘
-       │                    │                     │
-       │ handshake          │ verify delegation   │ outbound headers
-       │ (nonce+DID)        │ attach proof        │ (X-Agent-DID,
-       │                    │ check scopes        │  X-Delegation-Chain)
-       ▼                    ▼                     ▼
-   Session established   Tool executes        Context forwarded
-   with replay           with signed           to downstream
-   prevention            receipt               with delegation
-```
+| Capability | How it works |
+|-----------|-------------|
+| **Cryptographic identity** | Ed25519 key pairs, `did:key` and `did:web` resolution |
+| **Signed proofs** | Detached JWS over JCS-canonicalized request/response hashes |
+| **Delegation credentials** | W3C Verifiable Credentials with scope constraints |
+| **Revocation** | StatusList2021 bitstring with cascading revocation |
+| **Replay prevention** | Nonce-based handshake with timestamp skew validation |
+| **Extensible** | Bring your own KMS, HSM, nonce cache (Redis, DynamoDB, KV), or DID method |
 
 ---
 
-## Modules
+## Links
 
-| Module | What it does |
-|--------|-------------|
-| **middleware** | `withMCPI(server)` — one-call integration. `createMCPIMiddleware` for low-level control. |
-| **delegation** | Issue and verify W3C VCs. DID:key and DID:web resolution. StatusList2021 revocation. Cascading revocation. |
-| **proof** | Generate and verify detached JWS proofs with canonical hashing (JCS + SHA-256). |
-| **session** | Nonce-based handshake. Replay prevention. Session TTL management. |
-| **providers** | Abstract `CryptoProvider`, `IdentityProvider`, `StorageProvider`. Plug in your own KMS, HSM, or vault. |
-| **types** | Pure TypeScript interfaces. Zero runtime dependencies. |
-
-All modules available as subpath exports: `@mcp-i/core/delegation`, `@mcp-i/core/proof`, etc.
-
----
-
-## Examples
-
-| Example | What it shows |
-|---------|--------------|
-| [**consent-basic**](./examples/consent-basic/) | Human-in-the-loop consent flow: `needs_authorization` → consent page → delegation VC → tool execution. SSE + Streamable HTTP transports. |
-| [**consent-full**](./examples/consent-full/) | Same consent flow as consent-basic, powered by [`@kya-os/consent`](https://www.npmjs.com/package/@kya-os/consent) — multi-mode auth, configurable branding, and production-grade consent UI. |
-| [**node-server**](./examples/node-server/) | Low-level Server API with handshake, proof, and restricted tools. |
-| [**brave-search-mcp-server**](./examples/brave-search-mcp-server/) | Real-world MCP server wrapping Brave Search with MCP-I identity and proofs. |
-| [**outbound-delegation**](./examples/outbound-delegation/) | Forwarding delegation context to downstream services (§7 gateway pattern). |
-| [**verify-proof**](./examples/verify-proof/) | Standalone proof verification with DID:key resolution. |
-| [**context7-with-mcpi**](./examples/context7-with-mcpi/) | Adding MCP-I to an existing MCP server with `withMCPI`. |
-
----
-
-## Extension Points
-
-MCP-I is a protocol, not a platform. All cryptographic operations, storage, and identity management are abstracted behind interfaces you implement:
-
-```typescript
-// Use AWS KMS instead of local keys
-class KMSCryptoProvider extends CryptoProvider {
-  async sign(data: Uint8Array, keyArn: string) {
-    return kmsClient.sign({ KeyId: keyArn, Message: data });
-  }
-}
-
-// Use Redis instead of in-memory nonce cache
-class RedisNonceCacheProvider extends NonceCacheProvider {
-  async hasNonce(nonce: string) { return redis.exists(`nonce:${nonce}`); }
-  async addNonce(nonce: string, ttl: number) { redis.setex(`nonce:${nonce}`, ttl, '1'); }
-}
-```
-
-Supported DID methods: `did:key` (built-in, self-resolving), `did:web` (built-in, HTTP resolution), or any custom method via `DIDResolver`.
-
----
-
-## Conformance
-
-Three levels defined in [CONFORMANCE.md](./CONFORMANCE.md):
-
-| Level | Requirements |
-|-------|-------------|
-| **Level 1** — Core Crypto | Ed25519 signatures, DID:key resolution, JCS canonicalization |
-| **Level 2** — Full Session | Nonce-based handshake, session management, replay prevention |
-| **Level 3** — Full Delegation | W3C VC issuance/verification, scope attenuation, StatusList2021, cascading revocation |
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md). DCO sign-off required. All PRs must pass CI (type check, lint, test across Node 20/22 on Linux/macOS/Windows).
-
-## Governance
-
-See [GOVERNANCE.md](./GOVERNANCE.md). Lazy consensus for non-breaking changes. Explicit vote for breaking changes.
-
-## Security
-
-See [SECURITY.md](./SECURITY.md). 48-hour acknowledgement. 90-day coordinated disclosure.
+- [Spec](https://modelcontextprotocol-identity.io) | [DIF TAAWG](https://identity.foundation/working-groups/agent-and-authorization.html) | [npm](https://www.npmjs.com/package/@mcp-i/core)
+- [CONTRIBUTING.md](./CONTRIBUTING.md) | [CONFORMANCE.md](./CONFORMANCE.md) | [SECURITY.md](./SECURITY.md) | [GOVERNANCE.md](./GOVERNANCE.md)
 
 ## License
 
-MIT — see [LICENSE](./LICENSE)
+MIT
