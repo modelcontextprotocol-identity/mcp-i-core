@@ -58,6 +58,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
+    "demo": "bash scripts/demo.sh",
+    "demo:no-inspector": "bash scripts/demo.sh --no-inspector",
     "example:server": "npx tsx examples/node-server/server.ts",
     "example:inspector": "npx @modelcontextprotocol/inspector npx tsx examples/node-server/server.ts --stdio"
   },
