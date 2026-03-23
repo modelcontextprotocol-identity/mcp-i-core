@@ -18,6 +18,10 @@ MCP gave AI agents a universal way to discover and use tools. But it didn't solv
 
 No central authority. No shared API keys. The math proves it.
 
+<p align="center">
+  <img src="./demo-quickstart/visuals/before-after-new.png" alt="Before and after MCP-I" width="700" />
+</p>
+
 > **Open standard.** MCP-I is governed by the [DIF Trusted AI Agents Working Group](https://identity.foundation/working-groups/agent-and-authorization.html). Spec and docs: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io/introduction)
 
 ---
@@ -70,6 +74,10 @@ npx @modelcontextprotocol/inspector
 
 Call `checkout`. You'll get a consent link back. Open it, approve, retry the tool. That's the full delegation flow.
 
+<p align="center">
+  <img src="./demo-quickstart/visuals/demo.gif" alt="MCP-I consent flow demo" width="700" />
+</p>
+
 ---
 
 ## Protect specific tools
@@ -103,6 +111,10 @@ const placeOrder = mcpi.wrapWithDelegation(
 
 Public tools get proofs automatically. Sensitive tools get proofs **and** require delegation. Your server, your rules.
 
+<p align="center">
+  <img src="./demo-quickstart/visuals/rendered/tool-protection.png" alt="Tool protection flow" width="600" />
+</p>
+
 ---
 
 ## How it works
@@ -125,6 +137,10 @@ Agent (did:key:z6Mk...)             MCP-I Server (did:key:z6Mn...)
 1. **Identity.** Both sides generate Ed25519 key pairs, producing `did:key` identifiers. No registration required.
 2. **Delegation.** Protected tools require a Verifiable Credential: a signed, scoped, time-limited permission from a human. Tamper with it and the signature breaks.
 3. **Proof.** Every tool response includes a detached JWS signature over the canonical response. The caller can independently verify the response hasn't been modified.
+
+<p align="center">
+  <img src="./demo-quickstart/visuals/rendered/proof-annotated.svg.png" alt="Annotated _meta.proof structure" width="700" />
+</p>
 
 ---
 
