@@ -14,13 +14,14 @@ MCP gave AI agents a universal way to discover and use tools. But it didn't solv
 
 | | Without MCP-I | With MCP-I |
 |---|---|---|
-| **Who is calling?** | Unknown — shared API key across all agents | Cryptographic identity via [DIDs](https://www.w3.org/TR/did-core/) (`did:key:z6Mk...`) |
-| **Are they allowed?** | No way to tell — key has full access | Scoped [Verifiable Credential](https://www.w3.org/TR/vc-data-model-2.0/) from a human approver |
-| **What happened?** | Logs show `API_KEY_PROD` made the call | Signed proof (JWS) — tamper-evident audit trail |
-| **Revoke one agent?** | Rotate the key. Break everyone. | One call. No one else affected. |
+| **Who is calling?** | 🔴 Unknown — shared API key across all agents | 🟢 Cryptographic identity via [DIDs](https://www.w3.org/TR/did-core/) (`did:key:z6Mk...`) |
+| **Are they allowed?** | 🔴 No way to tell — key has full access | 🟢 Scoped [Verifiable Credential](https://www.w3.org/TR/vc-data-model-2.0/) from a human approver |
+| **What happened?** | 🔴 Logs show `API_KEY_PROD` made the call | 🟢 Signed proof (JWS) — tamper-evident audit trail |
+| **Revoke one agent?** | 🔴 Rotate the key. Break everyone. | 🟢 One call. No one else affected. |
 
 No central authority. No shared API keys. The math proves it.
 
+> [!NOTE]
 > **Open standard.** MCP-I is governed by the [DIF Trusted AI Agents Working Group](https://identity.foundation/working-groups/agent-and-authorization.html). Spec and docs: [modelcontextprotocol-identity.io](https://modelcontextprotocol-identity.io/introduction)
 
 ---
@@ -43,13 +44,14 @@ await withMCPI(server, { crypto: new NodeCryptoProvider() });
 
 That's it. Your server now has:
 
-- A unique cryptographic identity (`did:key`) generated automatically
-- A handshake endpoint agents can use to establish mutual trust
-- Signed proofs attached to every tool response
-- Session management with replay prevention
+- 🔑 A unique cryptographic identity (`did:key`) generated automatically
+- 🤝 A handshake endpoint agents can use to establish mutual trust
+- ✍️ Signed proofs attached to every tool response
+- 🛡️ Session management with replay prevention
 
 Register tools exactly like you normally would. MCP-I operates at the protocol layer -- your tool code doesn't change.
 
+> [!TIP]
 > **Full walkthrough:** The [Quick Start guide](https://modelcontextprotocol-identity.io/quickstart) covers install, first run, the consent flow, and what's happening under the hood.
 
 ---
@@ -113,10 +115,15 @@ Public tools get proofs automatically. Sensitive tools get proofs **and** requir
 ```mermaid
 flowchart LR
     A[Agent calls tool] --> B{What kind of tool?}
-    B -- Public --> C[search] --> D[Execute] --> E[Response + proof]
-    B -- Protected --> F[place_order] --> G{Has delegation VC?}
-    G -- No --> H[needs_authorization] --> I[Human approves] --> J[VC issued]
-    G -- Yes --> K[Verify VC] --> L[Execute] --> M[Response + proof]
+    B -- Public --> C[search]:::public --> D[Execute]:::public --> E[Response + proof]:::success
+    B -- Protected --> F[place_order]:::protected --> G{Has delegation VC?}
+    G -- No --> H[needs_authorization]:::warning --> I[Human approves] --> J[VC issued]:::success
+    G -- Yes --> K[Verify VC]:::protected --> L[Execute]:::protected --> M[Response + proof]:::success
+
+    classDef public fill:#a6e3a1,stroke:#40a02b,color:#1e1e2e
+    classDef protected fill:#f9e2af,stroke:#df8e1d,color:#1e1e2e
+    classDef warning fill:#fab387,stroke:#fe640b,color:#1e1e2e
+    classDef success fill:#89b4fa,stroke:#1e66f5,color:#1e1e2e
 ```
 
 ---
@@ -129,25 +136,31 @@ sequenceDiagram
     participant Server as MCP-I Server (did:key:z6Mn...)
     participant Human
 
+    rect rgba(166, 227, 161, 0.15)
     Note over Agent,Server: 1. Identity — Ed25519 key pairs, no registration
     Agent->>Server: Handshake (exchange DIDs)
     Server-->>Agent: Server identity confirmed
+    end
 
+    rect rgba(249, 226, 175, 0.15)
     Note over Agent,Server: 2. Delegation — scoped, time-limited, tamper-proof
     Agent->>Server: Call protected tool
     Server-->>Agent: needs_authorization + consent URL
     Agent->>Human: Redirect to consent page
     Human-->>Server: Approve → delegation VC issued
+    end
 
+    rect rgba(137, 180, 250, 0.15)
     Note over Agent,Server: 3. Proof — detached JWS over canonical response
     Agent->>Server: Retry tool + delegation VC
     Server->>Server: Verify VC chain → execute
     Server-->>Agent: Response + signed proof (JWS)
+    end
 ```
 
-1. **Identity.** Both sides generate Ed25519 key pairs, producing `did:key` identifiers. No registration required.
-2. **Delegation.** Protected tools require a Verifiable Credential: a signed, scoped, time-limited permission from a human. Tamper with it and the signature breaks.
-3. **Proof.** Every tool response includes a detached JWS signature over the canonical response. The caller can independently verify the response hasn't been modified.
+1. 🟢 **Identity.** Both sides generate Ed25519 key pairs, producing `did:key` identifiers. No registration required.
+2. 🟡 **Delegation.** Protected tools require a Verifiable Credential: a signed, scoped, time-limited permission from a human. Tamper with it and the signature breaks.
+3. 🔵 **Proof.** Every tool response includes a detached JWS signature over the canonical response. The caller can independently verify the response hasn't been modified.
 
 The proof is a standard detached JWS attached to `_meta.proof` in every response:
 
