@@ -14,10 +14,10 @@ MCP gave AI agents a universal way to discover and use tools. But it didn't solv
 
 | | Without MCP-I | With MCP-I |
 |---|---|---|
-| **Who is calling?** | 🔴 Unknown — shared API key across all agents | 🟢 Cryptographic identity via [DIDs](https://www.w3.org/TR/did-core/) (`did:key:z6Mk...`) |
-| **Are they allowed?** | 🔴 No way to tell — key has full access | 🟢 Scoped [Verifiable Credential](https://www.w3.org/TR/vc-data-model-2.0/) from a human approver |
-| **What happened?** | 🔴 Logs show `API_KEY_PROD` made the call | 🟢 Signed proof (JWS) — tamper-evident audit trail |
-| **Revoke one agent?** | 🔴 Rotate the key. Break everyone. | 🟢 One call. No one else affected. |
+| **Who is calling?** | Unknown — shared API key across all agents | Cryptographic identity via [DIDs](https://www.w3.org/TR/did-core/) (`did:key:z6Mk...`) |
+| **Are they allowed?** | No way to tell — key has full access | Scoped [Verifiable Credential](https://www.w3.org/TR/vc-data-model-2.0/) from a human approver |
+| **What happened?** | Logs show `API_KEY_PROD` made the call | Signed proof (JWS) — tamper-evident audit trail |
+| **Revoke one agent?** | Rotate the key. Break everyone. | One call. No one else affected. |
 
 No central authority. No shared API keys. The math proves it.
 
@@ -44,10 +44,10 @@ await withMCPI(server, { crypto: new NodeCryptoProvider() });
 
 That's it. Your server now has:
 
-- 🔑 A unique cryptographic identity (`did:key`) generated automatically
-- 🤝 A handshake endpoint agents can use to establish mutual trust
-- ✍️ Signed proofs attached to every tool response
-- 🛡️ Session management with replay prevention
+- A unique cryptographic identity (`did:key`) generated automatically
+- A handshake endpoint agents can use to establish mutual trust
+- Signed proofs attached to every tool response
+- Session management with replay prevention
 
 Register tools exactly like you normally would. MCP-I operates at the protocol layer -- your tool code doesn't change.
 
@@ -158,9 +158,9 @@ sequenceDiagram
     end
 ```
 
-1. 🟢 **Identity.** Both sides generate Ed25519 key pairs, producing `did:key` identifiers. No registration required.
-2. 🟡 **Delegation.** Protected tools require a Verifiable Credential: a signed, scoped, time-limited permission from a human. Tamper with it and the signature breaks.
-3. 🔵 **Proof.** Every tool response includes a detached JWS signature over the canonical response. The caller can independently verify the response hasn't been modified.
+1. **Identity.** Both sides generate Ed25519 key pairs, producing `did:key` identifiers. No registration required.
+2. **Delegation.** Protected tools require a Verifiable Credential: a signed, scoped, time-limited permission from a human. Tamper with it and the signature breaks.
+3. **Proof.** Every tool response includes a detached JWS signature over the canonical response. The caller can independently verify the response hasn't been modified.
 
 The proof is a standard detached JWS attached to `_meta.proof` in every response:
 
