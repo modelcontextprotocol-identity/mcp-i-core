@@ -85,16 +85,16 @@ describe('Proof Boundary Audit', () => {
 
   describe('timestamp skew boundaries', () => {
     it('should accept proof at exactly the skew boundary (300s)', async () => {
-      const proofTimestampSec = Math.floor(Date.now() / 1000);
-      const proofTimestampMs = proofTimestampSec * 1000;
+      // Generate proof first, then use its actual meta.ts to set the clock.
+      // This avoids a race where a second boundary is crossed between
+      // capturing the timestamp and generating the proof (which would
+      // cause a JWS signature mismatch).
+      const proof = await generateProof(agentA);
+      const proofTimestampMs = proof.meta.ts * 1000;
 
       // Clock is exactly SKEW_SECONDS * 1000 ms ahead of the proof timestamp
       const clock = new ControllableClockProvider(proofTimestampMs + SKEW_SECONDS * 1000);
       const { verifier } = makeVerifier(clock);
-
-      const proof = await generateProof(agentA);
-      // Override the proof timestamp to be our controlled value
-      proof.meta.ts = proofTimestampSec;
 
       const jwk = getPublicKeyJwk(agentA);
       const result = await verifier.verifyProof(proof, jwk);
@@ -103,15 +103,12 @@ describe('Proof Boundary Audit', () => {
     });
 
     it('should reject proof 1ms beyond the skew boundary', async () => {
-      const proofTimestampSec = Math.floor(Date.now() / 1000);
-      const proofTimestampMs = proofTimestampSec * 1000;
+      const proof = await generateProof(agentA);
+      const proofTimestampMs = proof.meta.ts * 1000;
 
       // Clock is 1ms beyond the skew window
       const clock = new ControllableClockProvider(proofTimestampMs + SKEW_SECONDS * 1000 + 1);
       const { verifier } = makeVerifier(clock);
-
-      const proof = await generateProof(agentA);
-      proof.meta.ts = proofTimestampSec;
 
       const jwk = getPublicKeyJwk(agentA);
       const result = await verifier.verifyProof(proof, jwk);
