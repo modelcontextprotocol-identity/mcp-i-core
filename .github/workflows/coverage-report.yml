@@ -1,0 +1,185 @@
+name: Coverage Report
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # Run coverage on the PR branch (json reporter gives us test counts for free)
+      - name: Run coverage (PR)
+        run: npx vitest run --coverage --coverage.reporter=json-summary --reporter=json --coverage.reportOnFailure > /tmp/pr-vitest-output.json 2>/dev/null
+        continue-on-error: true
+
+      - name: Save PR coverage and test count
+        run: |
+          cp coverage/coverage-summary.json /tmp/pr-coverage.json
+          cat /tmp/pr-vitest-output.json | jq '{numTotalTests: .numTotalTests, numPassedTests: .numPassedTests, numFailedTests: .numFailedTests, numTotalTestSuites: .numTotalTestSuites}' > /tmp/pr-test-results.json 2>/dev/null || echo '{}' > /tmp/pr-test-results.json
+
+      # Run coverage on the base branch for comparison
+      - name: Checkout base branch
+        run: git checkout ${{ github.event.pull_request.base.sha }}
+
+      - name: Install dependencies (base)
+        run: pnpm install
+
+      - name: Run coverage (base)
+        run: npx vitest run --coverage --coverage.reporter=json-summary --coverage.reportOnFailure
+        continue-on-error: true
+
+      - name: Save base coverage
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            cp coverage/coverage-summary.json /tmp/base-coverage.json
+          else
+            echo '{}' > /tmp/base-coverage.json
+          fi
+
+      # Generate the comment
+      - name: Generate coverage comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let pr, base;
+            try {
+              pr = JSON.parse(fs.readFileSync('/tmp/pr-coverage.json', 'utf8'));
+            } catch {
+              pr = null;
+            }
+            try {
+              base = JSON.parse(fs.readFileSync('/tmp/base-coverage.json', 'utf8'));
+            } catch {
+              base = null;
+            }
+
+            if (!pr || !pr.total) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '⚠️ Coverage report unavailable — tests may have failed.',
+              });
+              return;
+            }
+
+            const metrics = ['statements', 'branches', 'functions', 'lines'];
+
+            function fmt(pct) {
+              return pct.toFixed(2) + '%';
+            }
+
+            function delta(prPct, basePct) {
+              if (basePct == null) return '';
+              const d = prPct - basePct;
+              if (Math.abs(d) < 0.005) return '±0';
+              const arrow = d > 0 ? '▲' : '▼';
+              return `${arrow} ${d > 0 ? '+' : ''}${d.toFixed(2)}%`;
+            }
+
+            // Build summary table
+            let table = '| Metric | Coverage | Delta |\n';
+            table += '|--------|----------|-------|\n';
+
+            for (const m of metrics) {
+              const prPct = pr.total[m]?.pct ?? 0;
+              const basePct = base?.total?.[m]?.pct;
+              table += `| **${m.charAt(0).toUpperCase() + m.slice(1)}** `;
+              table += `| ${fmt(prPct)} `;
+              table += `| ${delta(prPct, basePct)} |\n`;
+            }
+
+            // Find files with decreased coverage
+            const decreased = [];
+            if (base && base.total) {
+              for (const [file, prData] of Object.entries(pr)) {
+                if (file === 'total') continue;
+                const baseData = base[file];
+                if (!baseData) continue;
+                const prPct = prData.statements?.pct ?? 0;
+                const basePct = baseData.statements?.pct ?? 0;
+                if (basePct - prPct >= 0.5) {
+                  decreased.push({ file: file.replace(/^.*\/src\//, 'src/'), prPct, basePct });
+                }
+              }
+            }
+
+            // Load test results
+            let testResults = {};
+            try {
+              testResults = JSON.parse(fs.readFileSync('/tmp/pr-test-results.json', 'utf8'));
+            } catch {}
+
+            const totalTests = testResults.numTotalTests ?? 0;
+            const passedTests = testResults.numPassedTests ?? 0;
+            const failedTests = testResults.numFailedTests ?? 0;
+            const testSuites = testResults.numTotalTestSuites ?? 0;
+            const overallPct = pr.total.statements?.pct ?? 0;
+
+            let body = `## Coverage Report\n\n`;
+            body += table + '\n';
+
+            if (decreased.length > 0) {
+              body += `### Files with decreased coverage\n\n`;
+              body += '| File | Before | After | Change |\n';
+              body += '|------|--------|-------|--------|\n';
+              for (const d of decreased) {
+                body += `| \`${d.file}\` | ${fmt(d.basePct)} | ${fmt(d.prPct)} | ${delta(d.prPct, d.basePct)} |\n`;
+              }
+              body += '\n';
+            }
+
+            body += `\n<details><summary>Details</summary>\n\n`;
+            body += `- **Tests**: ${passedTests} passed` + (failedTests > 0 ? `, ${failedTests} failed` : '') + ` (${totalTests} total across ${testSuites} suites)\n`;
+            body += `- **Overall coverage**: ${fmt(overallPct)} statements\n`;
+            body += `- **Config**: vitest + v8, thresholds enforced in \`vitest.config.mts\`\n`;
+            body += `</details>\n`;
+
+            // Find and update existing comment or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const marker = '## Coverage Report';
+            const existing = comments.find(c => c.body?.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
