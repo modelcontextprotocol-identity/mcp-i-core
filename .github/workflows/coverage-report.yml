@@ -85,7 +85,6 @@ jobs:
             }
 
             const metrics = ['statements', 'branches', 'functions', 'lines'];
-            const thresholds = { lines: 80, branches: 75, functions: 80, statements: 80 };
 
             function fmt(pct) {
               return pct.toFixed(2) + '%';
@@ -99,24 +98,16 @@ jobs:
               return `${arrow} ${d > 0 ? '+' : ''}${d.toFixed(2)}%`;
             }
 
-            function status(pct, metric) {
-              const threshold = thresholds[metric];
-              if (pct >= threshold) return '✅';
-              return '⚠️';
-            }
-
             // Build summary table
-            let table = '| Metric | Coverage | Delta | Threshold | Status |\n';
-            table += '|--------|----------|-------|-----------|--------|\n';
+            let table = '| Metric | Coverage | Delta |\n';
+            table += '|--------|----------|-------|\n';
 
             for (const m of metrics) {
               const prPct = pr.total[m]?.pct ?? 0;
               const basePct = base?.total?.[m]?.pct;
               table += `| **${m.charAt(0).toUpperCase() + m.slice(1)}** `;
               table += `| ${fmt(prPct)} `;
-              table += `| ${delta(prPct, basePct)} `;
-              table += `| ${thresholds[m]}% `;
-              table += `| ${status(prPct, m)} |\n`;
+              table += `| ${delta(prPct, basePct)} |\n`;
             }
 
             // Find files with decreased coverage
@@ -138,7 +129,7 @@ jobs:
             const covered = pr.total.statements?.covered ?? 0;
             const total = pr.total.statements?.total ?? 0;
 
-            let body = `## 📊 Coverage Report\n\n`;
+            let body = `## Coverage Report\n\n`;
             body += table + '\n';
 
             if (decreased.length > 0) {
@@ -163,7 +154,7 @@ jobs:
               issue_number: context.issue.number,
             });
 
-            const marker = '## 📊 Coverage Report';
+            const marker = '## Coverage Report';
             const existing = comments.find(c => c.body?.startsWith(marker));
 
             if (existing) {
