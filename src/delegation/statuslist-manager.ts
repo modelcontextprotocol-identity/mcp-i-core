@@ -28,6 +28,8 @@ export interface StatusListIdentityProvider {
 export class StatusList2021Manager {
   private statusListBaseUrl: string;
   private defaultListSize: number;
+  /** Per-status-list mutex to serialize updateStatus calls and prevent race conditions. */
+  private updateLocks = new Map<string, Promise<void>>();
 
   constructor(
     private storage: StatusListStorageProvider,
@@ -63,6 +65,21 @@ export class StatusList2021Manager {
   }
 
   async updateStatus(credentialStatus: CredentialStatus, revoked: boolean): Promise<void> {
+    const { statusListCredential } = credentialStatus;
+
+    // Serialize updates per status list to prevent concurrent read-modify-write races.
+    // Each call chains on the previous operation for the same list.
+    const previous = this.updateLocks.get(statusListCredential) ?? Promise.resolve();
+    const operation = previous.then(() => this.doUpdateStatus(credentialStatus, revoked));
+
+    // Store a non-rejecting version so the chain continues even if one update fails
+    this.updateLocks.set(statusListCredential, operation.catch(() => {}));
+
+    // Propagate the actual error to the caller
+    await operation;
+  }
+
+  private async doUpdateStatus(credentialStatus: CredentialStatus, revoked: boolean): Promise<void> {
     const { statusListCredential, statusListIndex } = credentialStatus;
 
     const statusList = await this.storage.getStatusList(statusListCredential);

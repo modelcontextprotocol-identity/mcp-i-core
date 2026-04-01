@@ -232,11 +232,7 @@ describe('Graph-Revocation Round-Trip Audit', () => {
   // ── Concurrent Revocation ─────────────────────────────────────
 
   describe('concurrent revocation', () => {
-    // BUG: StatusList2021Manager.updateStatus does read-modify-write without
-    // atomicity. Concurrent calls both read the same bitstring, each sets their
-    // own bit, then the second write overwrites the first — losing a revocation.
-    // See: https://github.com/modelcontextprotocol-identity/mcp-i-core/issues/31
-    it.skip('should handle concurrent revocation of sibling subtrees — see #31', async () => {
+    it('should handle concurrent revocation of sibling subtrees', async () => {
       await registerWithStatus('del-root', null, issuerIdentity.did, agentA.did);
       await registerWithStatus('del-child1', 'del-root', agentA.did, agentB.did);
       await registerWithStatus('del-gc1', 'del-child1', agentB.did, agentC.did);
