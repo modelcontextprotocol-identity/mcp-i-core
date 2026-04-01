@@ -133,11 +133,7 @@ describe('Graph-Revocation Round-Trip Audit', () => {
       expect(root.revoked).toBe(false);
     });
 
-    // BUG: isRevoked() can't distinguish "directly revoked" from "cascade revoked"
-    // because cascading revocation sets bits on ALL descendants. chain.reverse()
-    // finds the child's own bit first, so revokedAncestor is never populated.
-    // See: https://github.com/modelcontextprotocol-identity/mcp-i-core/issues/30
-    it.skip('should detect ancestor revocation through chain walk — see #30', async () => {
+    it('should detect ancestor revocation through chain walk', async () => {
       await registerWithStatus('del-root', null, issuerIdentity.did, agentA.did);
       await registerWithStatus('del-child', 'del-root', agentA.did, agentB.did);
 

@@ -140,9 +140,11 @@ export class CascadingRevocationManager {
     reason?: string;
     revokedAncestor?: string;
   }> {
+    // Walk root → target so ancestor revocation is detected before the
+    // target's own (cascade-set) bit. getChain() already returns root-first order.
     const chain = await this.graph.getChain(delegationId);
 
-    for (const node of chain.reverse()) {
+    for (const node of chain) {
       if (node.credentialStatusId) {
         const credentialStatus = this.parseCredentialStatus(node.credentialStatusId);
         if (credentialStatus) {
