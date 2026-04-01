@@ -33,8 +33,10 @@ jobs:
         run: npx vitest run --coverage --coverage.reporter=json-summary --coverage.reportOnFailure
         continue-on-error: true
 
-      - name: Save PR coverage
-        run: cp coverage/coverage-summary.json /tmp/pr-coverage.json
+      - name: Save PR coverage and test count
+        run: |
+          cp coverage/coverage-summary.json /tmp/pr-coverage.json
+          npx vitest run --reporter=json 2>/dev/null | jq '{numTotalTests: .numTotalTests, numPassedTests: .numPassedTests, numFailedTests: .numFailedTests, numTotalTestSuites: .numTotalTestSuites}' > /tmp/pr-test-results.json 2>/dev/null || echo '{}' > /tmp/pr-test-results.json
 
       # Run coverage on the base branch for comparison
       - name: Checkout base branch
@@ -125,15 +127,23 @@ jobs:
               }
             }
 
-            // Test counts from coverage data
-            const covered = pr.total.statements?.covered ?? 0;
-            const total = pr.total.statements?.total ?? 0;
+            // Load test results
+            let testResults = {};
+            try {
+              testResults = JSON.parse(fs.readFileSync('/tmp/pr-test-results.json', 'utf8'));
+            } catch {}
+
+            const totalTests = testResults.numTotalTests ?? 0;
+            const passedTests = testResults.numPassedTests ?? 0;
+            const failedTests = testResults.numFailedTests ?? 0;
+            const testSuites = testResults.numTotalTestSuites ?? 0;
+            const overallPct = pr.total.statements?.pct ?? 0;
 
             let body = `## Coverage Report\n\n`;
             body += table + '\n';
 
             if (decreased.length > 0) {
-              body += `### ⚠️ Files with decreased coverage\n\n`;
+              body += `### Files with decreased coverage\n\n`;
               body += '| File | Before | After | Change |\n';
               body += '|------|--------|-------|--------|\n';
               for (const d of decreased) {
@@ -142,8 +152,9 @@ jobs:
               body += '\n';
             }
 
-            body += `\n<details><summary>Coverage details</summary>\n\n`;
-            body += `- **Statements**: ${covered} / ${total} covered\n`;
+            body += `\n<details><summary>Details</summary>\n\n`;
+            body += `- **Tests**: ${passedTests} passed` + (failedTests > 0 ? `, ${failedTests} failed` : '') + ` (${totalTests} total across ${testSuites} suites)\n`;
+            body += `- **Overall coverage**: ${fmt(overallPct)} statements\n`;
             body += `- **Config**: vitest + v8, thresholds enforced in \`vitest.config.mts\`\n`;
             body += `</details>\n`;
 
