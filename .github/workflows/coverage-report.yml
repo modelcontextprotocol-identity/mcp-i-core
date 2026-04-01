@@ -28,15 +28,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      # Run coverage on the PR branch
+      # Run coverage on the PR branch (json reporter gives us test counts for free)
       - name: Run coverage (PR)
-        run: npx vitest run --coverage --coverage.reporter=json-summary --coverage.reportOnFailure
+        run: npx vitest run --coverage --coverage.reporter=json-summary --reporter=json --coverage.reportOnFailure > /tmp/pr-vitest-output.json 2>/dev/null
         continue-on-error: true
 
       - name: Save PR coverage and test count
         run: |
           cp coverage/coverage-summary.json /tmp/pr-coverage.json
-          npx vitest run --reporter=json 2>/dev/null | jq '{numTotalTests: .numTotalTests, numPassedTests: .numPassedTests, numFailedTests: .numFailedTests, numTotalTestSuites: .numTotalTestSuites}' > /tmp/pr-test-results.json 2>/dev/null || echo '{}' > /tmp/pr-test-results.json
+          cat /tmp/pr-vitest-output.json | jq '{numTotalTests: .numTotalTests, numPassedTests: .numPassedTests, numFailedTests: .numFailedTests, numTotalTestSuites: .numTotalTestSuites}' > /tmp/pr-test-results.json 2>/dev/null || echo '{}' > /tmp/pr-test-results.json
 
       # Run coverage on the base branch for comparison
       - name: Checkout base branch
