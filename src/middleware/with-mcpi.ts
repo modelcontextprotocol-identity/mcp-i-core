@@ -86,6 +86,20 @@ export interface MCPIDelegationConfig {
     leafCredential: DelegationCredential,
   ) => Promise<DelegationCredential[]>;
   /**
+   * When true, re-delegations (credentials with a `parentId`) MUST include
+   * an `audience` constraint binding them to the verifying server's DID.
+   *
+   * This prevents confused-deputy attacks where a delegated credential is
+   * forwarded to an unintended server. Without audience binding, any server
+   * that receives the credential will accept it.
+   *
+   * Recommended for production. See: Alan Karp's transitive access analysis
+   * and MCP-I §11.6 (Confused Deputy Attacks).
+   *
+   * Default is false for backward compatibility.
+   */
+  requireAudienceOnRedelegation?: boolean;
+  /**
    * Compatibility mode for legacy integrations that cannot yet provide
    * full delegation-chain and status-list resolvers.
    *
@@ -786,6 +800,21 @@ export function createMCPIMiddleware(
           return {
             valid: false,
             reason: `Delegation ${delegation.id} audience does not include server DID ${identity.did}`,
+          };
+        }
+
+        // When requireAudienceOnRedelegation is enabled, every non-root
+        // credential in the chain MUST have an audience constraint.
+        // This prevents confused-deputy attacks where re-delegated
+        // credentials are forwarded to unintended servers.
+        if (
+          delegationConfig?.requireAudienceOnRedelegation &&
+          delegation.parentId &&
+          !delegation.constraints.audience
+        ) {
+          return {
+            valid: false,
+            reason: `Delegation ${delegation.id} is a re-delegation (parentId: ${delegation.parentId}) but has no audience constraint. Re-delegations must include an audience when requireAudienceOnRedelegation is enabled`,
           };
         }
 
