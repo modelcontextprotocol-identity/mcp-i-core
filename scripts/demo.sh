@@ -96,40 +96,38 @@ echo -e "${GREEN}Dependencies ready.${NC}"
 echo ""
 
 # ── Start servers ────────────────────────────────────────────────────
-declare -A PORTS
-declare -A URLS
-declare -A TRANSPORTS
+# Parallel indexed arrays (bash 3 compatible – no associative arrays)
+EX_NAMES=()
+EX_URLS=()
+EX_TRANSPORTS=()
 
 start_example() {
   local name="$1"
+  EX_NAMES+=("$name")
   case "$name" in
     node-server)
       PORT=3001 npx tsx examples/node-server/server.ts &
       PIDS+=($!)
-      PORTS[$name]=3001
-      URLS[$name]="http://localhost:3001/sse"
-      TRANSPORTS[$name]="SSE"
+      EX_URLS+=("http://localhost:3001/sse")
+      EX_TRANSPORTS+=("SSE")
       ;;
     consent-basic)
       PORT=3002 CONSENT_PORT=3012 npx tsx examples/consent-basic/src/server.ts &
       PIDS+=($!)
-      PORTS[$name]=3002
-      URLS[$name]="http://localhost:3002/sse"
-      TRANSPORTS[$name]="SSE"
+      EX_URLS+=("http://localhost:3002/sse")
+      EX_TRANSPORTS+=("SSE")
       ;;
     consent-full)
       PORT=3003 CONSENT_PORT=3013 npx tsx examples/consent-full/src/server.ts &
       PIDS+=($!)
-      PORTS[$name]=3003
-      URLS[$name]="http://localhost:3003/sse"
-      TRANSPORTS[$name]="SSE"
+      EX_URLS+=("http://localhost:3003/sse")
+      EX_TRANSPORTS+=("SSE")
       ;;
     context7-with-mcpi)
       npx tsx examples/context7-with-mcpi/src/index.ts --transport http --port 3004 &
       PIDS+=($!)
-      PORTS[$name]=3004
-      URLS[$name]="http://localhost:3004/mcp"
-      TRANSPORTS[$name]="Streamable HTTP"
+      EX_URLS+=("http://localhost:3004/mcp")
+      EX_TRANSPORTS+=("Streamable HTTP")
       ;;
   esac
 }
@@ -147,9 +145,9 @@ echo -e "${BOLD}├────────────────────�
 printf  "${BOLD}│ %-20s │ %-9s │ %-26s │${NC}\n" "Example" "Transport" "URL"
 echo -e "${BOLD}├──────────────────────┼───────────┼────────────────────────────┤${NC}"
 
-for ex in "${EXAMPLES[@]}"; do
+for i in "${!EX_NAMES[@]}"; do
   printf "│ ${CYAN}%-20s${NC} │ %-9s │ ${GREEN}%-26s${NC} │\n" \
-    "$ex" "${TRANSPORTS[$ex]}" "${URLS[$ex]}"
+    "${EX_NAMES[$i]}" "${EX_TRANSPORTS[$i]}" "${EX_URLS[$i]}"
 done
 
 echo -e "${BOLD}└──────────────────────┴───────────┴────────────────────────────┘${NC}"
