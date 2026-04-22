@@ -29,14 +29,14 @@ With outbound delegation propagation:
 
 | Header | Description | Example |
 |--------|-------------|---------|
-| `X-Agent-DID` | The original agent's DID | `did:key:z6Mk...` |
-| `X-Delegation-Chain` | The delegation chain ID (vcId of the root delegation) | `urn:uuid:abc-123` |
-| `X-Session-ID` | The current MCP-I session ID | `mcpi_xyz789` |
-| `X-Delegation-Proof` | Signed JWT proving the delegation is being forwarded | `eyJhbGciOiJFZERTQS...` |
+| `KYA-Agent-DID` | The original agent's DID | `did:key:z6Mk...` |
+| `KYA-Delegation-Chain` | The delegation chain ID (vcId of the root delegation) | `urn:uuid:abc-123` |
+| `KYA-Session-Id` | The current MCP-I session ID | `mcpi_xyz789` |
+| `KYA-Delegation-Proof` | Signed JWT proving the delegation is being forwarded | `eyJhbGciOiJFZERTQS...` |
 
 ## The Delegation Proof JWT
 
-The `X-Delegation-Proof` header contains a signed JWT with these claims:
+The `KYA-Delegation-Proof` header contains a signed JWT with these claims:
 
 ```json
 {
@@ -54,17 +54,17 @@ The `X-Delegation-Proof` header contains a signed JWT with these claims:
 
 Server B should:
 
-1. **Extract the JWT** from `X-Delegation-Proof`
+1. **Extract the JWT** from `KYA-Delegation-Proof`
 2. **Verify the signature** using the public key from the `iss` DID (Server A)
 3. **Check timing**: `iat` should be recent, `exp` should not have passed
 4. **Check audience**: `aud` should match Server B's hostname
 5. **Check scope**: should be `delegation:propagate`
-6. **Match DIDs**: `sub` should match `X-Agent-DID` header
+6. **Match DIDs**: `sub` should match `KYA-Agent-DID` header
 
 If all checks pass, Server B knows:
 - Server A is legitimately forwarding this request
-- The original agent is identified by `X-Agent-DID`
-- The delegation chain in `X-Delegation-Chain` can be fetched and verified
+- The original agent is identified by `KYA-Agent-DID`
+- The delegation chain in `KYA-Delegation-Chain` can be fetched and verified
 
 ## Running the Demo
 

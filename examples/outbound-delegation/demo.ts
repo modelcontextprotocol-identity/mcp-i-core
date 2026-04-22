@@ -222,19 +222,19 @@ async function main() {
   });
 
   console.log('Outbound Headers:');
-  console.log(`  X-Agent-DID:        ${headers['X-Agent-DID'].slice(0, 40)}...`);
-  console.log(`  X-Delegation-Chain: ${headers['X-Delegation-Chain']}`);
-  console.log(`  X-Session-ID:       ${headers['X-Session-ID']}`);
-  console.log(`  X-Delegation-Proof: ${headers['X-Delegation-Proof'].slice(0, 40)}...`);
+  console.log(`  KYA-Agent-DID:        ${headers['KYA-Agent-DID'].slice(0, 40)}...`);
+  console.log(`  KYA-Delegation-Chain: ${headers['KYA-Delegation-Chain']}`);
+  console.log(`  KYA-Session-Id:       ${headers['KYA-Session-Id']}`);
+  console.log(`  KYA-Delegation-Proof: ${headers['KYA-Delegation-Proof'].slice(0, 40)}...`);
   console.log();
 
   // -------------------------------------------------------------------------
-  // Step 5: Decode the X-Delegation-Proof JWT
+  // Step 5: Decode the KYA-Delegation-Proof JWT
   // -------------------------------------------------------------------------
-  console.log('Step 5: Decoding the X-Delegation-Proof JWT...');
+  console.log('Step 5: Decoding the KYA-Delegation-Proof JWT...');
   console.log('-'.repeat(70));
 
-  const jwt = headers['X-Delegation-Proof'];
+  const jwt = headers['KYA-Delegation-Proof'];
   const jwtHeader = decodeProtectedHeader(jwt);
   const jwtPayload = decodeJwt(jwt);
 
@@ -261,7 +261,7 @@ async function main() {
 
   console.log('Server B receives the request with these headers and should:');
   console.log();
-  console.log('  1. Extract X-Delegation-Proof JWT');
+  console.log('  1. Extract KYA-Delegation-Proof JWT');
   console.log('  2. Verify JWT signature using iss DID public key');
   console.log(`     - iss (${(jwtPayload.iss as string).slice(0, 30)}...) resolves to public key`);
   console.log('  3. Check timing:');
@@ -272,11 +272,11 @@ async function main() {
   console.log('  5. Check scope:');
   console.log(`     - scope is "delegation:propagate"`);
   console.log('  6. Match DIDs:');
-  console.log(`     - sub (${(jwtPayload.sub as string).slice(0, 30)}...) matches X-Agent-DID header`);
+  console.log(`     - sub (${(jwtPayload.sub as string).slice(0, 30)}...) matches KYA-Agent-DID header`);
   console.log();
 
-  const subMatchesHeader = jwtPayload.sub === headers['X-Agent-DID'];
-  console.log(`  Verification: sub matches X-Agent-DID? ${subMatchesHeader ? 'YES' : 'NO'}`);
+  const subMatchesHeader = jwtPayload.sub === headers['KYA-Agent-DID'];
+  console.log(`  Verification: sub matches KYA-Agent-DID? ${subMatchesHeader ? 'YES' : 'NO'}`);
   console.log();
 
   console.log('='.repeat(70));

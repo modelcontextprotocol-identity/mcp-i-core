@@ -548,11 +548,11 @@ When an MCP server calls downstream services (APIs, other MCP servers), it MUST 
 
 | Header | Value |
 |--------|-------|
-| `X-Agent-DID` | Original agent's DID |
-| `X-Delegation-Chain` | Comma-separated list of delegation IDs from root to current |
-| `X-Session-ID` | MCP-I session ID |
-| `X-Delegation-Proof` | Signed JWT proving delegation authority |
-| `X-Scopes` | Comma-separated list of granted scopes |
+| `KYA-Agent-DID` | Original agent's DID |
+| `KYA-Delegation-Chain` | Comma-separated list of delegation IDs from root to current |
+| `KYA-Session-Id` | MCP-I session ID |
+| `KYA-Delegation-Proof` | Signed JWT proving delegation authority |
+| `KYA-Granted-Scopes` | Comma-separated list of granted scopes |
 
 ### 8.2 Delegation Proof JWT
 
@@ -736,7 +736,7 @@ Session IDs (`mcpi_*`) appear in detached proofs. Within a session, all tool cal
 
 ### 12.3 Delegation Chain Disclosure
 
-Outbound `X-Agent-DID` and `X-Delegation-Chain` headers reveal the agent's identity and delegation provenance to downstream services. Implementations SHOULD only propagate delegation headers to trusted downstream services.
+Outbound `KYA-Agent-DID` and `KYA-Delegation-Chain` headers reveal the agent's identity and delegation provenance to downstream services. Implementations SHOULD only propagate delegation headers to trusted downstream services.
 
 ### 12.4 Proof Retention and Right to Erasure
 
