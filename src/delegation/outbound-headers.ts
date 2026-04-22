@@ -5,10 +5,10 @@
  * delegation context to downstream services.
  *
  * Headers (MCP-I §7):
- * - X-Agent-DID: the original agent's DID
- * - X-Delegation-Chain: the delegation chain ID (vcId of the root delegation)
- * - X-Session-ID: the current session ID
- * - X-Delegation-Proof: a signed JWT proving the delegation is being forwarded
+ * - KYA-Agent-DID: the original agent's DID
+ * - KYA-Delegation-Chain: the delegation chain ID (vcId of the root delegation)
+ * - KYA-Session-Id: the current session ID
+ * - KYA-Delegation-Proof: a signed JWT proving the delegation is being forwarded
  *
  * Related Spec: MCP-I §7 — Outbound Delegation Propagation
  */
@@ -23,10 +23,10 @@ import { logger } from '../logging/index.js';
  * Header names for outbound delegation propagation
  */
 export const OUTBOUND_HEADER_NAMES = {
-  AGENT_DID: 'X-Agent-DID',
-  DELEGATION_CHAIN: 'X-Delegation-Chain',
-  SESSION_ID: 'X-Session-ID',
-  DELEGATION_PROOF: 'X-Delegation-Proof',
+  AGENT_DID: 'KYA-Agent-DID',
+  DELEGATION_CHAIN: 'KYA-Delegation-Chain',
+  SESSION_ID: 'KYA-Session-Id',
+  DELEGATION_PROOF: 'KYA-Delegation-Proof',
 } as const;
 
 /**
@@ -51,10 +51,10 @@ export interface OutboundDelegationContext {
  * Outbound delegation headers to attach to downstream requests
  */
 export interface OutboundDelegationHeaders {
-  'X-Agent-DID': string;
-  'X-Delegation-Chain': string;
-  'X-Session-ID': string;
-  'X-Delegation-Proof': string;
+  'KYA-Agent-DID': string;
+  'KYA-Delegation-Chain': string;
+  'KYA-Session-Id': string;
+  'KYA-Delegation-Proof': string;
 }
 
 /**
@@ -182,9 +182,9 @@ export async function buildOutboundDelegationHeaders(
   });
 
   return {
-    'X-Agent-DID': session.agentDid,
-    'X-Delegation-Chain': delegation.vcId,
-    'X-Session-ID': session.sessionId,
-    'X-Delegation-Proof': jwt,
+    'KYA-Agent-DID': session.agentDid,
+    'KYA-Delegation-Chain': delegation.vcId,
+    'KYA-Session-Id': session.sessionId,
+    'KYA-Delegation-Proof': jwt,
   };
 }

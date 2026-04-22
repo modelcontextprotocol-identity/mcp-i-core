@@ -979,11 +979,11 @@ describe('Transitive Access — Karp Use Cases', () => {
       });
 
       // Headers expose the full provenance
-      expect(headers['X-Agent-DID']).toBe(alice.did);
-      expect(headers['X-Delegation-Chain']).toBe(aliceToBob.id);
-      expect(headers['X-Session-ID']).toBe('mcpi_test-session');
+      expect(headers['KYA-Agent-DID']).toBe(alice.did);
+      expect(headers['KYA-Delegation-Chain']).toBe(aliceToBob.id);
+      expect(headers['KYA-Session-Id']).toBe('mcpi_test-session');
       // The proof is a signed JWT that downstream can verify
-      expect(headers['X-Delegation-Proof']).toMatch(
+      expect(headers['KYA-Delegation-Proof']).toMatch(
         /^eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
       );
     });
