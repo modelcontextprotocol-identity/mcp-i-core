@@ -1,7 +1,7 @@
 {
   "name": "@mcp-i/core",
-  "version": "1.1.1",
-  "description": "Core library for MCP-I — delegation, proof, and session primitives for Model Context Protocol Identity",
+  "version": "1.2.0",
+  "description": "Core library for MCP-I \u2014 delegation, proof, and session primitives for Model Context Protocol Identity",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
