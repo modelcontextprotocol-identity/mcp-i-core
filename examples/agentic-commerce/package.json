@@ -17,7 +17,7 @@
     "rp": "tsx src/rp/server.ts",
     "merchant": "tsx src/merchant/server.ts",
     "agent": "tsx src/agent/agent.ts",
-    "gateway": "tsx src/agent/gateway.ts",
+    "gateway": "tsx src/demo.ts",
     "issue": "tsx src/rp/issue.ts",
     "revoke": "tsx src/rp/revoke.ts",
     "verify:receipt": "python3 scripts/verify-receipt.py",

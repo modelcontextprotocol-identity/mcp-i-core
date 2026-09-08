@@ -33,7 +33,6 @@ import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
@@ -82,6 +81,9 @@ import { CATALOG } from '../lib/product.js';
 import { buildDiscoveryDocument } from './well-known.js';
 import { decideOrder, summarizeMandate, type Mandate } from './place-order.js';
 import { discover, runAgentOrder } from '../agent/agent.js';
+import { createGatewayServer } from '../agent/gateway.js';
+import { handleStatelessMcp } from '../lib/stateless-mcp.js';
+import { ResponseProofContext } from '../lib/response-proof-context.js';
 
 export interface MerchantAppConfig {
   identity: KeyedIdentity;
@@ -185,7 +187,7 @@ export async function createMerchant(config: MerchantAppConfig) {
   const kyaos: KyaOsMiddleware = createKyaOsMiddleware(
     {
       identity: { did: identity.did, kid: identity.kid, privateKey: identity.privateKeyBase64, publicKey: identity.publicKeyBase64 },
-      autoSession: true,
+      autoSession: false,
       grantStore: requireCredentialStore,
       delegation: {
         fetchProvider,
@@ -199,6 +201,9 @@ export async function createMerchant(config: MerchantAppConfig) {
     },
     cryptoProvider,
   );
+  // Private response-proof metadata, independent of MCP transport sessions and
+  // caller authority. Explicit attribution survives concurrent HTTP clients.
+  const responseProofContext = new ResponseProofContext(kyaos.sessionManager, identity.did);
 
   // The gate strips the `_kyaos_*` control args before the handler runs, so the
   // verified credential reaches the handler through a per-call context: the
@@ -364,10 +369,10 @@ export async function createMerchant(config: MerchantAppConfig) {
       ],
     }));
 
-    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args = {} } = request.params;
-      const sessionId = extra?.sessionId;
       if (name === '_kyaos') return kyaos.handleKyaOs(args as Record<string, unknown>);
+      const sessionId = await responseProofContext.getSessionId();
       if (name === 'get_catalog') return catalogHandler({}, sessionId);
       if (name === 'place_order') {
         const a = args as Record<string, unknown>;
@@ -452,6 +457,7 @@ export async function createMerchant(config: MerchantAppConfig) {
   const app = new Hono();
   const discovery = buildDiscoveryDocument({ serverDid: identity.did, name: config.name, currency: 'CHF' });
 
+  app.get('/connect', (c) => c.redirect('/connect.html'));
   app.get('/.well-known/mcp', (c) => { c.header('Cache-Control', 'no-store'); return c.json(discovery); });
   app.get('/api/catalog', (c) => c.json(CATALOG));
 
@@ -604,16 +610,19 @@ export async function createMerchant(config: MerchantAppConfig) {
   if (env('GOOGLE_CLIENT_ID', '')) app.get('/setup-key.html', (c) => c.redirect(new URL('/setup-key.html', consentOrigin).toString()));
   app.use('/*', serveStatic({ root: path.relative(process.cwd(), WEB_DIR) || './web' }));
 
-  // ---- one HTTP server: /mcp → MCP transport, everything else → Hono ----------
+  // Both agent and merchant use stateless Streamable HTTP on the same listener.
   const honoListener = getRequestListener(app.fetch);
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
-    if (url.pathname === '/mcp' && req.method === 'POST') {
-      const server = createMcpServer();
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-      res.on('close', () => transport.close());
-      await server.connect(transport);
-      await transport.handleRequest(req, res);
+    if (url.pathname === '/agent/mcp') {
+      await handleStatelessMcp(req, res, () => createGatewayServer({
+        merchantOrigin: `http://127.0.0.1:${req.socket.localPort}`,
+        audience: identity.did,
+      }), { loopbackOnly: true });
+      return;
+    }
+    if (url.pathname === '/mcp') {
+      await handleStatelessMcp(req, res, createMcpServer);
       return;
     }
     await honoListener(req, res);
@@ -637,8 +646,10 @@ export async function startMerchantServer(overrides: Partial<MerchantAppConfig> 
   await new Promise<void>((resolve) => merchant.httpServer.listen(config.port, '127.0.0.1', () => {
     console.log(`Merchant edge: http://localhost:${config.port}`);
     console.log(`  console:    http://localhost:${config.port}/`);
+    console.log(`  connect:    http://localhost:${config.port}/connect`);
+    console.log(`  Claude MCP: http://localhost:${config.port}/agent/mcp (stateless Streamable HTTP)`);
     console.log(`  discovery:  http://localhost:${config.port}/.well-known/mcp`);
-    console.log(`  MCP:        http://localhost:${config.port}/mcp`);
+    console.log(`  merchant:   http://localhost:${config.port}/mcp (delegation + holder proof required)`);
     console.log(`  did:        ${config.identity.did}`);
     console.log(`  trusts RP:  ${config.rpDid} (list: ${config.statusListUrl}${config.offline ? ', OFFLINE mirror' : ''})`);
     console.log(`  audit:      ${merchant.audit.ledger.ledgerId} · ${merchant.audit.capabilities.profile} · delivery ${merchant.audit.capabilities.delivery}${config.witness ? ` · witness ${config.rpOrigin}` : ''}`);

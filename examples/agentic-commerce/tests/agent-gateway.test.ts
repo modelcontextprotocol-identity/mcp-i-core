@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -105,23 +104,6 @@ describe('real HTTP agent and MCP gateway consent flow', () => {
     mode = 'tamper';
     await expect(agent.runAgentOrder({ product: 'risotto', quantity: 2 })).rejects.toThrow(/binding|proof/i);
     mode = 'challenge';
-  });
-
-  it('works over real stdio from an unrelated Desktop working directory', async () => {
-    const exampleRoot = fileURLToPath(new URL('..', import.meta.url));
-    const client = new Client({ name: 'desktop-stdio-test', version: '1.0' });
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [path.join(exampleRoot, 'node_modules/tsx/dist/cli.mjs'), path.join(exampleRoot, 'src/agent/gateway.ts')],
-      env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-      cwd: os.tmpdir(), stderr: 'pipe',
-    });
-    try {
-      await client.connect(transport);
-      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['browse_catalog', 'place_order']);
-      const result = await client.callTool({ name: 'place_order', arguments: { product: 'risotto', quantity: 2 } });
-      expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ error: 'needs_authorization', resumeToken: 'test-token' });
-    } finally { await client.close(); }
   });
 
   it('reports a CLI challenge as needing authorization, never as an allowed order', async () => {

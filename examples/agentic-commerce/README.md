@@ -16,7 +16,7 @@ The consent UI is installed from the public npm registry as `@kya-os/consent@0.1
 Keep the committed `package-lock.json`: it fixes the dependency graph for ordinary `npm install` and CI's `npm ci`.
 Resolving without it can trigger npm 10's circular peer-dependency resolver bug.
 Install dependencies before the workshop; the default demonstration runs on localhost without conference Wi-Fi.
-Claude Desktop needs its own network connection, so keep the scripted fallback ready.
+Claude needs its own network connection, so keep the scripted fallback ready.
 
 ```bash
 cd examples/agentic-commerce
@@ -27,6 +27,8 @@ npm run demo
 
 Project [the merchant console](http://localhost:4949/).
 The Responsible Party hub runs on port **4950**; the merchant runs on **4949**.
+Open [Connect Claude](http://localhost:4949/connect) for the HTTP endpoint and connection instructions.
+`npm run demo` also starts the shopping agent gateway at **`http://localhost:4949/agent/mcp`**.
 Setup writes identity keys, DID documents, the status list and a reserved index, with **no active DelegationCredential**.
 Do not run the low-level `npm run issue` fixture utility for the live flow.
 
@@ -53,13 +55,13 @@ If using Google, sign in after the final restart: Google sessions and pending lo
 ## Dylan's four-minute run of show: nine beats
 
 Complete dependency installation and Claude configuration before the audience arrives.
-Keep one terminal at this example directory, the merchant console and Claude Desktop ready.
+Keep one terminal at this example directory, the merchant console and Claude Code connected over HTTP ready.
 Default spoken path: **click-wrap issue → status-list revoke**.
 
 | Beat | Time | Exact action | What the audience sees |
 |---|---|---|---|
 | 1 | 0:00 | `npm run setup && npm run demo` | Merchant `:4949`, RP `:4950`, no active grant. |
-| 2 | 0:20 | Connect Claude with `docs/claude_desktop_config.json`; project `http://localhost:4949/`; press `P`. | The merchant verifier console. |
+| 2 | 0:20 | Connect Claude Code to `http://localhost:4949/agent/mcp` using the command below; project `http://localhost:4949/`; press `P`. | The merchant verifier console and HTTP shopping tools. |
 | 3 | 0:35 | Send the pinned Claude prompt below. | `place_order` reaches the merchant before a grant exists. |
 | 4 | 1:00 | Open **Open human consent** on the console, or Claude's verified `authorizationUrl`. | Signed `needs_authorization`, then the real `@kya-os/consent` UI. |
 | 5 | 1:25 | Point out GTIN, MaxAmount CHF 50.00, audience and Responsible Party; click **Approve grant**. | Human approval issues the scoped credential. |
@@ -119,15 +121,41 @@ The console buttons are another deterministic MCP client:
 Presenter mode hides controls but keeps keyboard shortcuts and the consent link active.
 Rehearse at the projector's resolution.
 
-## Claude Desktop configuration
+## Connect Claude over Streamable HTTP
 
-Use [docs/claude_desktop_config.json](docs/claude_desktop_config.json).
-Replace the example's absolute clone path and the absolute Node executable path, then merge the server entry into your existing Claude Desktop configuration.
-On macOS, that file is `~/Library/Application Support/Claude/claude_desktop_config.json`.
-Fully quit and reopen Claude Desktop after editing it.
-The gateway exposes **browse_catalog** and **place_order**.
-It loads paths relative to this example, so an arbitrary Claude working directory is safe.
-The agent also requires `MERCHANT_DID`; setup writes it to `.env.local`, which the gateway loads.
+Both MCP endpoints use stateless Streamable HTTP and start with `npm run demo`.
+
+| Endpoint | Purpose |
+|---|---|
+| `http://localhost:4949/agent/mcp` | Connect Claude here: **browse_catalog** and **place_order**, with the gateway holding the shopping agent's key and grant. |
+| `http://localhost:4949/mcp` | The protected merchant MCP server: **get_catalog** and **place_order**, requiring the agent's holder proof for an order or consent challenge. |
+| `http://localhost:4950/` | The Responsible Party's human consent, passkey and revocation hub; this is not an MCP endpoint. |
+
+For local rehearsal, run this from the directory where you will start Claude Code:
+
+```bash
+claude mcp add --transport http --scope local kya-shopping-agent http://localhost:4949/agent/mcp
+claude mcp get kya-shopping-agent
+claude
+```
+
+In Claude Code, use `/mcp` to inspect the connection and available tools, then send the pinned prompt above.
+If a previous entry with this name launches a local process, remove it with `claude mcp remove kya-shopping-agent --scope local` before adding the HTTP entry.
+The equivalent JSON is [docs/claude-code.mcp.json](docs/claude-code.mcp.json); merge its entry into a project `.mcp.json` only if you prefer shared project configuration.
+See [Claude Code's HTTP configuration documentation](https://code.claude.com/docs/en/mcp#option-1-add-a-remote-http-server).
+
+Claude Desktop and Claude web **Custom connectors** use a reachable HTTPS server URL.
+Their connector requests originate from Anthropic's cloud even when the Desktop app is running on this laptop, so these localhost URLs cannot be used there directly.
+See [Anthropic's connector networking guidance](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities) and [custom connector setup](https://claude.com/docs/connectors/custom/remote-mcp).
+This example has not been deployed publicly.
+A hosted rehearsal needs an authenticated gateway and correctly configured public consent origins; the presenter console's local reset and revocation controls must remain private.
+The existing `docs/claude_desktop_config.json` is a legacy stdio configuration and is not used for this HTTP flow.
+
+The gateway is the agent's trusted signing runtime.
+Claude supplies product and quantity; the gateway adds the agent's credential and fresh proof before calling the protected merchant at `/mcp`.
+Connecting a generic Claude client directly to the merchant does not supply those proofs.
+The merchant enforces delegation using the published `@kya-os/mcp` package; the Model Context Protocol SDK supplies the HTTP transport.
+The agent requires `MERCHANT_DID`; setup writes it to `.env.local`, which the demo loads.
 
 The gateway signs each tool request with the agent's private key, verifies the merchant's response proof before exposing the authorization URL, and remembers the pending resume token.
 The approved credential is reloaded from the shared agent store on the next call.
@@ -136,6 +164,11 @@ That first order may use any quantity or product instance within the approved pr
 Out-of-scope or over-cap attempts are refused before consuming the token.
 Private keys and proof arguments are kept out of the model's tool arguments and projector output.
 The projector deliberately displays the authorization URL, including its one-use resume token, so the human can open consent.
+
+**Stateless refers to the MCP transport:** each HTTP request is handled independently, with no `Mcp-Session-Id` or remembered MCP protocol session required.
+The agent's reusable key and delegation, the RP's consent records and the revocation list remain application state.
+Every protected request carries its own fresh holder proof, and the merchant checks the current revocation status each time.
+The gateway represents the single configured workshop agent; it is not a shared multi-user agent service.
 
 ## What the grant contains
 

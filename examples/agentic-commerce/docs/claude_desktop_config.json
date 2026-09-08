@@ -1,11 +1,11 @@
 {
-  "_comment": "EDIT THE PATHS: replace /ABSOLUTE/PATH/TO/kya-os-mcp with your clone path and /ABSOLUTE/PATH/TO/node with the result of `which node`. Merge this entry into your existing Claude Desktop config (macOS: ~/Library/Application Support/Claude/claude_desktop_config.json). Absolute paths are required because Claude Desktop does not inherit your shell PATH. Run `npm run setup && npm run demo` first. Setup creates agent keys but no active grant. The gateway exposes only browse_catalog and place_order, verifies the signed authorizationUrl, and reloads the approved credential and matching resume token for the first order within that grant's product class and cap. The workshop script repeats the same order for clarity. Fully quit and reopen Claude Desktop after editing. The gateway loads .env.local and var/ relative to the example directory regardless of its working directory.",
+  "_comment": "EDIT THE PATHS: replace /users/dylanhobbs/documents/@kya-os/kya-os-mcp with your clone path and /users/dylanhobbs/documents/@kya-os/node with the result of `which node`. Merge this entry into your existing Claude Desktop config (macOS: ~/Library/Application Support/Claude/claude_desktop_config.json). Absolute paths are required because Claude Desktop does not inherit your shell PATH. Run `npm run setup && npm run demo` first. Setup creates agent keys but no active grant. The gateway exposes only browse_catalog and place_order, verifies the signed authorizationUrl, and reloads the approved credential and matching resume token for the first order within that grant's product class and cap. The workshop script repeats the same order for clarity. Fully quit and reopen Claude Desktop after editing. The gateway loads .env.local and var/ relative to the example directory regardless of its working directory.",
   "mcpServers": {
     "kya-shopping-agent": {
-      "command": "/ABSOLUTE/PATH/TO/node",
+      "command": "/opt/homebrew/bin/node",
       "args": [
-        "/ABSOLUTE/PATH/TO/kya-os-mcp/examples/agentic-commerce/node_modules/tsx/dist/cli.mjs",
-        "/ABSOLUTE/PATH/TO/kya-os-mcp/examples/agentic-commerce/src/agent/gateway.ts"
+        "/users/dylanhobbs/documents/@kya-os/kya-os-mcp/examples/agentic-commerce/node_modules/tsx/dist/cli.mjs",
+        "/users/dylanhobbs/documents/@kya-os/kya-os-mcp/examples/agentic-commerce/src/agent/gateway.ts"
       ],
       "env": {
         "MERCHANT_PORT": "4949",

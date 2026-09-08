@@ -1,9 +1,8 @@
-#!/usr/bin/env npx tsx
 /**
- * KYA-OS GATEWAY — the agent runtime Claude Desktop plugs into.
+ * The agent runtime Claude connects to at /agent/mcp on the merchant listener.
  *
- *   Claude Desktop (the brain — no keys)
- *     │  plain MCP (stdio)
+ *   Claude (the brain, no keys)
+ *     │  stateless MCP (Streamable HTTP)
  *     ▼
  *   THIS gateway (holds the agent's did:key + the delegation; signs every call)
  *     │  place_order + credential + Ed25519 holder proof   (streamable-http)
@@ -15,19 +14,16 @@
  * credential and mints the per-request holder proof. The LLM never touches
  * key material: that is the point, and a talking point.
  *
- * Run:  npm run gateway        (stdio — see docs/claude_desktop_config.json)
+ * npm run demo mounts both HTTP endpoints; each request gets a fresh MCP server.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { loadAgentIdentity, merchantOrigin } from '../lib/wiring.js';
+import { merchantOrigin } from '../lib/wiring.js';
 import { browseCatalog, runAgentOrder } from './agent.js';
 import { responseBody } from './authorization.js';
 import { isMainModule } from '../lib/main-module.js';
-
-const MERCHANT = merchantOrigin();
-
-export function createGatewayServer(): Server {
+export function createGatewayServer(options: { merchantOrigin?: string; audience?: string } = {}): Server {
+  const merchant = options.merchantOrigin ?? merchantOrigin();
   const server = new Server({ name: 'kya-shopping-agent', version: '0.1.0' }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -40,7 +36,7 @@ export function createGatewayServer(): Server {
       {
         name: 'place_order',
         description:
-          'Place an order for a catalog product. If human consent is needed, returns a verified authorizationUrl to open and approve. After the human approves, retry with exactly the same product and quantity. The gateway attaches the new grant and holder proof. Returns an order receipt or a policy denial. This does not make a payment.',
+          'Place an order for a catalog product. If human consent is needed, returns a verified authorizationUrl to open and approve. After the human approves, retry within the approved product scope and per-order cap. The gateway attaches the new grant and a fresh holder proof. Returns an order receipt or a policy denial. This does not make a payment.',
         inputSchema: {
           type: 'object' as const,
           properties: {
@@ -57,13 +53,13 @@ export function createGatewayServer(): Server {
     const { name, arguments: args = {} } = request.params;
     try {
       if (name === 'browse_catalog') {
-        const items = (await browseCatalog(`${MERCHANT}/mcp`)) as Array<{ sku: string; name: string; uri: string; unitPrice: string; currency: string }>;
+        const items = (await browseCatalog(`${merchant}/mcp`)) as Array<{ sku: string; name: string; uri: string; unitPrice: string; currency: string }>;
         return { content: [{ type: 'text', text: items.map((i) => `- ${i.sku}: ${i.name} — ${i.currency} ${i.unitPrice} — ${i.uri}`).join('\n') }] };
       }
       if (name === 'place_order') {
         const product = String((args as Record<string, unknown>)['product'] ?? '');
         const quantity = Number((args as Record<string, unknown>)['quantity'] ?? 1);
-        const outcome = await runAgentOrder({ product, quantity, serverUrl: `${MERCHANT}/mcp` });
+        const outcome = await runAgentOrder({ product, quantity, serverUrl: `${merchant}/mcp`, audience: options.audience });
         const text = outcome.result.content?.[0]?.text ?? '{}';
         const body = responseBody(outcome.result);
         if (body['error'] === 'needs_authorization') {
@@ -90,13 +86,7 @@ export function createGatewayServer(): Server {
   return server;
 }
 
-async function main() {
-  const identity = loadAgentIdentity(); // fail fast if the agent has no keys
-  const server = createGatewayServer();
-  await server.connect(new StdioServerTransport());
-  process.stderr.write(`[gateway] kya-shopping-agent ready on stdio · agent ${identity.did} · merchant ${MERCHANT}\n`);
-}
-
 if (isMainModule(import.meta.url)) {
-  main().catch((err) => { process.stderr.write(`[gateway] fatal: ${err instanceof Error ? err.message : String(err)}\n`); process.exit(1); });
+  process.stderr.write(`This gateway uses Streamable HTTP. Run npm run demo, then connect to ${merchantOrigin()}/agent/mcp. See ${merchantOrigin()}/connect. Remove the old stdio client entry.\n`);
+  process.exitCode = 1;
 }

@@ -28,6 +28,8 @@
   body.revoked { --vignette: 0.16; }
 
   header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+  .connect-link { font-size: 12px; color: var(--bright); text-underline-offset: 4px; }
+  body.presenter .connect-link { display: none; }
   .wordmark { font-size: clamp(22px, 3.2vw, 34px); font-weight: 800; letter-spacing: 0.2em; color: var(--bright); text-transform: uppercase; display: flex; align-items: baseline; gap: 12px; }
   .wordmark .pre { font-size: 0.42em; color: var(--dim); letter-spacing: 0.28em; font-weight: 700; }
   .wordmark .cut { color: var(--ok); }
@@ -297,6 +299,7 @@
   <div class="role">Merchant edge · verifier view</div>
   <div class="live" id="live-m"><span class="dot"></span><span>merchant</span></div>
   <div class="live" id="live-rp"><span class="dot"></span><span>responsible party</span></div>
+  <a class="connect-link" href="/connect">Connect Claude · /agent/mcp</a>
 </header>
 <div class="subhead">
   <b>Human consent → scoped grant → order → revocation.</b>
