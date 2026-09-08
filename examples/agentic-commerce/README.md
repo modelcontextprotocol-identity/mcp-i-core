@@ -11,8 +11,10 @@ This demonstration places orders; it does not move money or integrate a payment 
 
 ## Start here
 
-Requires Node.js 20 or newer and Python 3.
+Requires Python 3 and Node.js 20.19+, 22.12+, or 24+.
 The consent UI is installed from the public npm registry as `@kya-os/consent@0.1.48`.
+Keep the committed `package-lock.json`: it fixes the dependency graph for ordinary `npm install` and CI's `npm ci`.
+Resolving without it can trigger npm 10's circular peer-dependency resolver bug.
 Install dependencies before the workshop; the default demonstration runs on localhost without conference Wi-Fi.
 Claude Desktop needs its own network connection, so keep the scripted fallback ready.
 

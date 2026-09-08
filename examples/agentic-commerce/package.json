@@ -6,7 +6,7 @@
   "description": "From agent-visible to agent-actionable: a shopping agent discovers a merchant's accepted trust schemes, presents a delegation scoped to a GS1 Digital Link product class, and is revoked mid-session by its Responsible Party \u2014 on the published @kya-os/mcp, did:web + a self-hosted StatusList2021.",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "scripts": {
     "setup": "tsx scripts/setup.ts",

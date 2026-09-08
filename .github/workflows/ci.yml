@@ -81,7 +81,10 @@ jobs:
   agentic-commerce:
     name: Agentic commerce (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
+      fail-fast: false
       matrix:
         node-version: ['20.x', '22.x']
     defaults:
@@ -89,15 +92,17 @@ jobs:
         working-directory: examples/agentic-commerce
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
 
-      # Standalone example: exercise the published packages with no sibling
-      # checkout or root-library aliases. Example lockfiles are not committed.
+      # Standalone example: install its locked public npm dependencies with no
+      # sibling checkout, root-library aliases, or peer-validation bypass.
       - name: Install example dependencies from npm
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Type check example
         run: npm run typecheck

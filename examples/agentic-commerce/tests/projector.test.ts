@@ -41,8 +41,15 @@ class Element {
   setAttribute(name: string, value: string) { if (name === 'href') this.href = value; }
 }
 
-async function projector(initialChallenge?: Record<string, unknown>, credential: unknown = null) {
-  const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+// Extract the trusted local fixture script for VM execution, not HTML sanitization.
+function inlinePageScript(html: string): string {
+  const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i)?.[1];
+  if (script === undefined) throw new Error('The local page fixture has no inline script');
+  return script;
+}
+
+async function projector(initialChallenge?: Record<string, unknown>, credential: unknown = null,
+  html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1]!, new Element()]));
   const streams = new Map<string, { onmessage?: (event: { data: string }) => void }>();
   const state = { credential, responses: {} as Record<string, unknown> };
@@ -66,7 +73,7 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
         : { credential: state.credential } }),
     EventSource: class { constructor(url: string) { streams.set(url, this); } },
   });
-  vm.runInContext(html.match(/<script>([\s\S]*)<\/script>/)![1]!, context);
+  vm.runInContext(inlinePageScript(html), context);
   await new Promise((resolve) => setTimeout(resolve, 0));
   const emit = (stream: string, data: Record<string, unknown>) => {
     const source = streams.get(stream);
@@ -196,6 +203,16 @@ function namedGrant(displayName = 'Dylan Hobbs') {
 }
 
 describe('projector human-grant journey', () => {
+  it('executes the actual projector page when HTML uses uppercase script tags', async () => {
+    const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')
+      .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', '</SCRIPT>');
+    const p = await projector(undefined, namedGrant(), html);
+    expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
+    expect(p.get('verdict-code').textContent).toBe('GRANT ACTIVE · READY TO ORDER');
+    p.emit('/api/events', { type: 'reset' });
+    expect(p.get('grant-pill').textContent).toBe('no grant');
+  });
+
   it('renders consent as a separate gate and preserves proven holder identity while consent is pending', async () => {
     const p = await projector();
     p.emit('/api/events', { ...challenge, checks: { signature: 'skip', revocation: 'skip', holder: 'pass', product: 'skip', cap: 'skip', consent: 'pending', receipt: 'skip' } });
@@ -311,8 +328,8 @@ describe('projector human-grant journey', () => {
   });
 });
 
-async function registrationPage(signedIn: boolean, displayName = 'Dylan Hobbs', label = 'Platform passkey', identityEnabled = true) {
-  const html = fs.readFileSync(new URL('../web/setup-key.html', import.meta.url), 'utf8');
+async function registrationPage(signedIn: boolean, displayName = 'Dylan Hobbs', label = 'Platform passkey', identityEnabled = true,
+  html = fs.readFileSync(new URL('../web/setup-key.html', import.meta.url), 'utf8')) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1]!, new Element()]));
   const requests: Array<{ url: string; credentials?: string }> = [];
   const get = (id: string) => {
@@ -332,12 +349,21 @@ async function registrationPage(signedIn: boolean, displayName = 'Dylan Hobbs', 
       return { ok: true, json: async () => data };
     },
   });
-  vm.runInContext(html.match(/<script>([\s\S]*)<\/script>/)![1]!, context);
+  vm.runInContext(inlinePageScript(html), context);
   await new Promise(resolve => setTimeout(resolve, 0));
   return { get, requests };
 }
 
 describe('account-bound passkey registration page', () => {
+  it('executes the actual registration page when HTML uses uppercase script tags', async () => {
+    const html = fs.readFileSync(new URL('../web/setup-key.html', import.meta.url), 'utf8')
+      .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', '</SCRIPT>');
+    const page = await registrationPage(true, 'Workshop Test Human', 'Platform passkey', true, html);
+    expect(page.get('account-name').textContent).toBe('Workshop Test Human');
+    expect(page.get('go').disabled).toBe(false);
+    expect(page.requests.some(request => request.url.endsWith('/auth/account'))).toBe(true);
+  });
+
   it('preserves noncredentialed cross-origin RP requests for legacy registration', async () => {
     const page = await registrationPage(false, '', 'Platform passkey', false);
     expect(page.get('go').disabled).toBe(false);
