@@ -66,7 +66,7 @@ beforeAll(async () => {
   await issueAndActivate({ index: 94, agentDid: process.env['AGENT_DID']!, audience: merchantDid, identity, statusListUrl: STATUS_LIST_URL });
 
   rp = rpMod.startRpServer(RP_PORT);
-  merchant = merchantMod.startMerchantServer({ port: MERCHANT_PORT });
+  merchant = await merchantMod.startMerchantServer({ port: MERCHANT_PORT, auditDir: path.join(tmp, 'audit') });
   await new Promise((r) => setTimeout(r, 300));
 });
 
@@ -146,6 +146,80 @@ describe('the stage, beat by beat', () => {
     expect((await order('risotto', 1)).denied).toBe(false);
   });
 
+  it('A · every beat is in the ledger; the checkpoint is signed by the merchant and witnessed by the RP', async () => {
+    const res = await fetch(`http://localhost:${MERCHANT_PORT}/api/act/audit`, { method: 'POST' });
+    const r = (await res.json()) as { entries: Array<{ eventType: string; outcome: string; reason: string | null; anchored: boolean }>; checkpoint: { treeSize: string; rootDigest: string } | null; witness: { observer: { did: string } } | null; witnessError: string | null; chainIntact: boolean; allIncluded: boolean; unanchored: number; profile: { advertised: string }; tree: unknown[] };
+    expect(res.status).toBe(200);
+    expect(r.chainIntact).toBe(true);
+    expect(r.allIncluded).toBe(true);
+    expect(r.unanchored).toBe(0);
+    expect(r.profile.advertised).toBe('AAP-1');
+    expect(r.checkpoint?.treeSize).toBe(String(r.entries.length));
+    expect(r.tree.length).toBe(2 * r.entries.length - 1);
+    expect(r.entries[0]?.eventType).toBe('ledger.epoch.started');
+    const types = r.entries.map((e) => e.eventType);
+    expect(types).toContain('tool.call.completed');      // beat 1
+    expect(types).toContain('tool.call.failed');         // beats 2, 3 (handler refusals)
+    expect(types).toContain('authorization.denied');     // beat 5 (holder binding) and the revoked retry
+    expect(types).toContain('delegation.rejected');      // K → 4
+    expect(r.witnessError).toBeNull();
+    expect(r.witness?.observer.did).toBe(process.env['RP_DID']);
+    const latest = (await (await fetch(`http://localhost:${RP_PORT}/api/rp/audit/latest?ledgerId=${encodeURIComponent('kya:merchant:' + merchantDid.slice(-8).toLowerCase() + ':orders')}&ledgerEpochId=epoch-${new Date().toISOString().slice(0, 10)}`)).json()) as { observations: number; latest: { checkpoint: { core: { rootDigest: string } } } | null };
+    expect(latest.observations).toBe(1);
+    expect(latest.latest?.checkpoint.core.rootDigest).toBe(r.checkpoint?.rootDigest);
+  });
+
+  it('T · an insider WITH the merchant key edits one entry: signature valid, chain + root + inclusion invalid', async () => {
+    const t = (await (await fetch(`http://localhost:${MERCHANT_PORT}/api/act/tamper`, { method: 'POST' })).json()) as {
+      target: { eventType: string; before: string; after: string }; rootsMatch: boolean; chainBreaksAt: string | null; honestInclusion: boolean; forgedInclusion: boolean; forgedReceiptVerifies: boolean; witnessStillBindsAnchoredRoot: boolean;
+      reports: Record<'honest' | 'tampered', Record<string, { verdict: string; reasonCodes: string[] }>>;
+    };
+    expect(t.target.eventType).toBe('tool.call.denied');
+    expect(t.target.before).toBe('denied');
+    expect(t.target.after).toBe('succeeded');
+    expect(t.forgedReceiptVerifies).toBe(true);       // the insider has the key
+    expect(t.rootsMatch).toBe(false);
+    expect(t.chainBreaksAt).not.toBeNull();
+    expect(t.honestInclusion).toBe(true);
+    expect(t.forgedInclusion).toBe(false);
+    expect(t.witnessStillBindsAnchoredRoot).toBe(true);
+    const h = t.reports.honest, x = t.reports.tampered;
+    for (const dim of ['cryptographicIntegrity', 'chainIntegrity', 'checkpointIntegrity', 'anchorIntegrity', 'scopeEvidenceCompleteness']) expect(h[dim]?.verdict, dim).toBe('valid');
+    expect(h['authorizedAsObserved']?.verdict).toBe('indeterminate'); // honest: the bundle carries no delegation collateral
+    expect(x['cryptographicIntegrity']?.verdict).toBe('valid');       // re-signed correctly…
+    expect(x['chainIntegrity']).toEqual({ verdict: 'invalid', reasonCodes: ['AUDIT_PREDECESSOR_MISMATCH'] });
+    expect(x['checkpointIntegrity']?.verdict).toBe('invalid');
+    expect(x['checkpointIntegrity']?.reasonCodes).toEqual(expect.arrayContaining(['AUDIT_CHECKPOINT_ROOT_MISMATCH', 'AUDIT_MERKLE_PROOF_INVALID']));
+    expect(x['anchorIntegrity']?.verdict).toBe('valid');              // the RP's receipt still names the honest checkpoint
+  });
+
+  it('E · the exported bundle passes the SDK CLI and stdlib Python; the edited one fails both', async () => {
+    const e = (await (await fetch(`http://localhost:${MERCHANT_PORT}/api/act/export`, { method: 'POST' })).json()) as { files: { bundle: string; tampered: string; policy: string; keys: string }; components: Array<{ path: string }> };
+    expect(e.components.map((c) => c.path).sort()).toEqual(['checkpoints.json', 'entries.json', 'inclusion-proofs.json', 'observations.json']);
+    const cli = path.join(process.cwd(), 'node_modules', '@kya-os', 'mcp', 'dist', 'audit', 'cli.js');
+    const run = (bundle: string) => spawnSync(process.execPath, [cli, 'verify', bundle, '--policy', e.files.policy, '--keys', e.files.keys], { encoding: 'utf8' });
+    const ok = run(e.files.bundle);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect((JSON.parse(ok.stdout) as { anchorIntegrity: { verdict: string } }).anchorIntegrity.verdict).toBe('valid');
+    const bad = run(e.files.tampered);
+    expect(bad.status).toBe(1);
+    expect((JSON.parse(bad.stdout) as { chainIntegrity: { reasonCodes: string[] } }).chainIntegrity.reasonCodes).toContain('AUDIT_PREDECESSOR_MISMATCH');
+
+    const py = (bundle: string) => spawnSync('python3', [path.join(process.cwd(), 'scripts', 'verify-ledger.py'), bundle, '--keys', e.files.keys, '--quiet'], { encoding: 'utf8' });
+    const pyOk = py(e.files.bundle);
+    expect(pyOk.status, pyOk.stderr).toBe(0);
+    const okReport = JSON.parse(pyOk.stdout) as { verdict: string; dimensions: Record<string, string>; checks: number };
+    expect(okReport.verdict).toBe('valid');
+    expect(okReport.dimensions['witness']).toBe('valid');
+    expect(okReport.checks).toBeGreaterThan(100);
+    const pyBad = py(e.files.tampered);
+    expect(pyBad.status).toBe(1);
+    const badReport = JSON.parse(pyBad.stdout) as { dimensions: Record<string, string> };
+    expect(badReport.dimensions['chain']).toBe('invalid');
+    expect(badReport.dimensions['checkpoint']).toBe('invalid');
+    expect(badReport.dimensions['entries']).toBe('valid');
+  });
+
   it('the hub going down fails CLOSED: status unresolvable → refused', async () => {
     await new Promise<void>((r) => rp.server.close(() => r()));
     merchant.statusListResolver.invalidateCache();
@@ -159,7 +233,7 @@ describe('the stage, beat by beat', () => {
   });
 
   it('OFFLINE=1: the RP DID document is served from the mirror and verification still passes', async () => {
-    const offline = merchantMod.startMerchantServer({ port: MERCHANT_PORT + 1, offline: true });
+    const offline = await merchantMod.startMerchantServer({ port: MERCHANT_PORT + 1, offline: true, witness: false });
     await new Promise((r) => setTimeout(r, 200));
     try {
       const outcome = await agent.runAgentOrder({ product: 'risotto', quantity: 1, serverUrl: `http://localhost:${MERCHANT_PORT + 1}/mcp`, audience: merchantDid });

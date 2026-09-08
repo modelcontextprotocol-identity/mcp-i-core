@@ -185,6 +185,91 @@
   .key-card .intent code { color: var(--text); }
   .key-cancel { margin-top: 22px; background: none; border: 1px solid var(--line-hot); color: var(--dim); font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 16px; cursor: pointer; }
   .key-cancel:hover { color: var(--text); border-color: var(--text); }
+
+  /* audit strip (main grid) */
+  .audit-strip { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; font-size: 12px; }
+  .audit-strip .n { font-size: 22px; font-weight: 800; color: var(--bright); letter-spacing: 0.04em; }
+  .audit-strip .n small { font-size: 11px; font-weight: 400; color: var(--dim); letter-spacing: 0.1em; }
+  .audit-strip .root { color: var(--info); overflow-wrap: anywhere; font-size: 11px; }
+
+  /* audit overlay — the finale */
+  .audit-overlay { position: fixed; inset: 0; z-index: 15; display: none; flex-direction: column; background: rgba(6,8,10,0.97); padding: 16px clamp(14px, 2.4vw, 32px); overflow: hidden; }
+  .audit-overlay.on { display: flex; }
+  .audit-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: nowrap; margin-bottom: 10px; min-width: 0; }
+  .audit-head .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .audit-head .title { font-size: clamp(18px, 2.4vw, 26px); font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--bright); white-space: nowrap; flex: none; }
+  .audit-head .title .cut { color: var(--ok); }
+  .audit-head .title.tampered .cut { color: var(--kill); }
+  .audit-head .sub { color: var(--dim); font-size: 11.5px; letter-spacing: 0.06em; }
+  .audit-head .sub b { color: var(--text); }
+  .audit-head .close { margin-left: auto; color: var(--dim); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; }
+  .audit-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; flex: 1; min-height: 0; }
+  .audit-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .audit-box { background: var(--panel); border: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; flex: none; }
+  .audit-box.grow { flex: 1 1 0; }
+  .audit-box.grow2 { flex: 2 1 0; }
+  .audit-box.capped .bb { max-height: 30vh; }
+  .tree-root { flex: none; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2); font-size: 12px; font-weight: 800; color: var(--ok); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .tree-root.bad { color: var(--kill); }
+  .tree-root .h { color: var(--info); font-weight: 400; }
+  .tree-root.bad .h { color: var(--kill); }
+  .tree-root .re { color: var(--kill); font-weight: 400; }
+  .audit-box .bh { padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); display: flex; justify-content: space-between; gap: 8px; flex: none; min-width: 0; }
+  .audit-box .bh span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .audit-box .bh span:last-child { flex: none; max-width: 60%; }
+  .audit-box .bb { padding: 8px 12px; overflow: auto; min-height: 0; font-size: 12px; }
+  table.ledger { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.ledger th { text-align: left; color: var(--dim); font-weight: 400; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; padding: 2px 6px 6px 0; border-bottom: 1px solid var(--line); position: sticky; top: -8px; background: var(--panel); z-index: 1; }
+  table.ledger td { padding: 2.5px 6px 2.5px 0; border-bottom: 1px dashed var(--line); vertical-align: top; white-space: nowrap; }
+  table.ledger td.reason { font-size: 10px; color: var(--dim); }
+  table.ledger td.reason span { display: inline-block; max-width: 210px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+  @media (max-width: 1366px) { table.ledger { font-size: 11px; } table.ledger td.reason span { max-width: 150px; } .tree { font-size: 11px; } .kv.tight { font-size: 11px; } }
+  table.ledger td.seq { color: var(--dim); font-variant-numeric: tabular-nums; }
+  table.ledger td.ev { color: var(--text); }
+  table.ledger td.digest { color: var(--info); font-variant-numeric: tabular-nums; }
+  table.ledger td.chain { color: var(--dim); }
+  table.ledger tr.o-succeeded td.ev, table.ledger tr.o-succeeded td.out { color: var(--ok); }
+  table.ledger tr.o-denied td.ev, table.ledger tr.o-denied td.out, table.ledger tr.o-failed td.ev, table.ledger tr.o-failed td.out { color: var(--kill); }
+  table.ledger tr.o-unknown td.out { color: var(--dim); }
+  table.ledger tr.forged { background: var(--kill-dim); outline: 1px solid var(--kill-deep); }
+  table.ledger tr.forged td.out { color: var(--kill); font-weight: 800; }
+  table.ledger tr.forged td.out s { color: var(--dim); font-weight: 400; margin-right: 6px; }
+  table.ledger tr.break td.chain { color: var(--kill); font-weight: 800; }
+  table.ledger tr.unanchored td { opacity: 0.55; }
+  .tree { font-size: 11.5px; line-height: 1.45; white-space: pre; }
+  .tree .row { display: block; }
+  .tree .row.root { color: var(--ok); font-weight: 800; }
+  .tree .row.root.bad { color: var(--kill); }
+  .tree .row.leaf { color: var(--text); }
+  .tree .row.leaf.forged { color: var(--kill); font-weight: 800; }
+  .tree .row.node { color: var(--dim); }
+  .tree .row.node.dirty { color: var(--kill); }
+  .tree .h { color: var(--info); }
+  .tree .row.forged .h, .tree .row.dirty .h, .tree .row.root.bad .h { color: var(--kill); }
+  .kv.tight { grid-template-columns: 96px 1fr; font-size: 11.5px; gap: 3px 10px; }
+  .kv.tight dd { overflow-wrap: anywhere; }
+  .kv.tight dd.digest { color: var(--info); }
+  .verdicts { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+  .verdict { border: 1px solid var(--line-hot); padding: 5px 6px; background: var(--panel-2); min-width: 0; }
+  .verdict .vn { font-size: 8.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .verdict .vv { font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vr-line { margin-top: 6px; font-size: 10.5px; color: var(--dim); overflow-wrap: anywhere; }
+  .vr-line b { color: var(--kill); font-weight: 600; }
+  .vr-line .ok { color: var(--ok); }
+  .verdict.valid { border-color: rgba(52,224,122,0.5); } .verdict.valid .vv { color: var(--ok); }
+  .verdict.invalid { border-color: var(--kill-deep); background: var(--kill-dim); } .verdict.invalid .vv { color: var(--kill); }
+  .verdict.indeterminate { border-color: rgba(255,176,32,0.5); } .verdict.indeterminate .vv { color: var(--warn); }
+  .verdict .vr { font-size: 9.5px; color: var(--dim); overflow-wrap: anywhere; margin-top: 2px; }
+  .tamper-banner { border: 1px solid var(--kill-deep); background: var(--kill-dim); padding: 8px 12px; font-size: 12px; color: var(--text); }
+  .tamper-banner b { color: var(--kill); }
+  .tamper-banner .ok { color: var(--ok); }
+  .export-box code { color: var(--bright); overflow-wrap: anywhere; display: block; margin-top: 4px; font-size: 11px; }
+  .audit-foot { margin-top: 8px; color: var(--dim); font-size: 10.5px; letter-spacing: 0.1em; display: flex; gap: 18px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
+  .audit-foot b { color: var(--text); }
+  body.presenter .audit-overlay { font-size: 13px; }
+  body.presenter table.ledger { font-size: 12px; }
+  body.presenter .tree { font-size: 12px; }
+  body.presenter .audit-head .close { display: none; }
 </style>
 </head>
 <body>
@@ -243,6 +328,21 @@
       <div class="panel-head"><span>Signed receipt · evidence record</span><span class="toggle" id="jws-toggle">expand</span></div>
       <div class="panel-body receipt" id="receipt">
         <div class="dim-line">every allowed response is signed by the merchant's key — a receipt any party can verify</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><span>Audit trail · shipped protocol</span><span class="pill" id="audit-pill">—</span></div>
+      <div class="panel-body">
+        <div class="audit-strip">
+          <div><div class="n" id="audit-n">0 <small>ENTRIES</small></div><div class="muted" id="audit-meta">signed by the merchant key · hash-chained · delivery required</div></div>
+          <div class="root" id="audit-root"></div>
+        </div>
+      </div>
+      <div class="controls" style="padding-top:0">
+        <button class="act primary" id="btn-audit">Anchor &amp; show<span class="key">[A] · checkpoint + witness</span></button>
+        <button class="act danger" id="btn-tamper">Insider edit<span class="key">[T] · with the key</span></button>
+        <button class="act" id="btn-export">Export bundle<span class="key">[E] · kya-audit verify</span></button>
       </div>
     </section>
   </div>
@@ -304,10 +404,46 @@
   </div>
 </div>
 
+<div class="audit-overlay" id="audit-overlay">
+  <div class="audit-head">
+    <div class="title" id="audit-title">AUDIT <span class="cut">TRAIL</span></div>
+    <div class="sub" id="audit-sub">every decision the gate made, as the SDK recorded it · <b>signed</b> · <b>hash-chained</b> · <b>RFC 9162 checkpoint</b> · <b>witnessed by the Responsible Party</b></div>
+    <div class="close" id="audit-close">esc · close</div>
+  </div>
+  <div class="audit-body">
+    <div class="audit-col">
+      <div class="audit-box grow">
+        <div class="bh"><span>Ledger · <span id="audit-ledger-id"></span></span><span id="audit-chain-note"></span></div>
+        <div class="bb" id="audit-table"></div>
+      </div>
+      <div class="audit-box" id="audit-tamper-box" style="display:none">
+        <div class="bh"><span>Insider edit · what still breaks</span><span id="audit-tamper-note"></span></div>
+        <div class="bb" id="audit-tamper"></div>
+      </div>
+    </div>
+    <div class="audit-col">
+      <div class="audit-box">
+        <div class="bh"><span>Checkpoint · signed RFC 9162 root</span><span id="audit-cp-note"></span></div>
+        <div class="bb"><dl class="kv tight" id="audit-cp"></dl></div>
+      </div>
+      <div class="audit-box grow2">
+        <div class="bh"><span>Merkle tree · leaves = entry digests</span><span id="audit-tree-note"></span></div>
+        <div class="tree-root" id="audit-tree-root"></div>
+        <div class="bb tree" id="audit-tree"></div>
+      </div>
+      <div class="audit-box capped">
+        <div class="bh"><span>Offline verifier · <span id="audit-verifier-label">verifyAuditBundle · trust from policy only</span></span><span id="audit-verdict-note"></span></div>
+        <div class="bb"><div id="audit-verdicts"></div><div id="audit-export" class="export-box muted" style="margin-top:8px"></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="audit-foot" id="audit-foot"></div>
+</div>
+
 <footer>
   <span>built on <a href="https://www.npmjs.com/package/@kya-os/mcp" target="_blank" rel="noopener">@kya-os/mcp</a> (DIF Trusted AI Agents WG)</span>
   <span>example: <code>examples/agentic-commerce</code></span>
-  <span class="mode-hint">keys · P presenter · C high-contrast</span>
+  <span class="mode-hint">keys · A anchor ledger · T insider edit · E export · P presenter · C high-contrast</span>
 </footer>
 
 <script>
@@ -438,6 +574,7 @@
       $('rp-kid').textContent = short(rp.kid || '', 48);
       const st = s.statusList || {};
       $('rp-list').textContent = `${st.url || '—'} · checked ${st.checkedAt} · unresolvable → ${st.onUnresolvable}`;
+      renderAuditStrip(s.audit);
     } catch (err) { line(`merchant state failed: ${esc(err.message)}`, 'kill-line'); }
     if (!rpOrigin) return;
     try {
@@ -550,6 +687,16 @@
         line(e.ok ? `🐍 python3 verify-receipt.py → OK · JCS + SHA-256 + Ed25519 in stdlib, no SDK: ${esc((r.checks || []).join(' · '))}` : `🐍 python verifier FAILED: ${esc(r.error || e.stderr || e.stdout)}`, e.ok ? 'ok-line' : 'kill-line', true);
       } else if (e.type === 'agent_error') {
         line(`agent error: ${esc(e.message)}`, 'kill-line');
+      } else if (e.type === 'audit') {
+        sep('audit trail');
+        line(`⛓ checkpoint over ${esc(e.entries)} entries · root <code>${esc(D(e.rootDigest, 16))}</code> · signed by the merchant · ${e.witnessed ? 'witnessed by the Responsible Party ✓' : (e.witnessError ? 'witness refused: ' + esc(e.witnessError) : 'no witness')} · chain ${e.chainIntact ? '✓' : '✗'} · inclusion ${e.allIncluded ? '✓' : '✗'} · ${esc(e.elapsedMs)} ms`, 'ok-line', true);
+        $('audit-root').textContent = `root ${D(e.rootDigest, 16)}… · ${e.treeSize} leaves`;
+        refresh();
+      } else if (e.type === 'tamper') {
+        const v = e.verdicts || {};
+        line(`🕵 insider edit #${esc(e.target.seq)} ${esc(e.target.eventType)} ${esc(e.target.before)} → ${esc(e.target.after)}: receipt re-signed ${e.forgedReceiptVerifies ? '✓' : '✗'} · chain break at #${esc(e.chainBreaksAt)} · root mismatch · inclusion ${e.forgedInclusion ? '✓' : '✗'} → verifier: chain ${esc((v.chainIntegrity || {}).verdict)}, checkpoint ${esc((v.checkpointIntegrity || {}).verdict)}`, 'kill-line', true);
+      } else if (e.type === 'export') {
+        line(`📦 replay bundle ${esc(short(e.bundleId, 60))} written · honest ${esc((e.verdicts.honest.chainIntegrity || {}).verdict)} / edited ${esc((e.verdicts.tampered.chainIntegrity || {}).verdict)} · <code>${esc(e.command.honest)}</code>`, 'info-line');
       }
     };
   }
@@ -575,9 +722,152 @@
         line(`issued grant #${esc(e.index)} to ${esc(short(e.subject, 30))} · scope ${esc(e.scope)}`, 'ok-line', false, rpLog);
       } else if (e.type === 'restored') {
         line(`bit ${esc(e.index)} cleared (demo reset)`, 'dim-line', false, rpLog);
+      } else if (e.type === 'witnessed') {
+        line(`👁 witnessed merchant checkpoint · ${esc(e.treeSize)} leaves · root ${esc(D(e.rootDigest, 12))} · receipt ${esc(D(e.observationDigest, 10))} (observation #${esc(e.observations)})`, 'ok-line', true, rpLog);
+      } else if (e.type === 'witness_refused') {
+        line(`👁 witness REFUSED a checkpoint: ${esc(e.message)}`, 'kill-line', true, rpLog);
       }
     };
   }
+
+  // ── audit trail: the finale. Rendered from the act responses (large), logged via SSE. ──
+  const D = (d, n = 16) => (typeof d === 'string' ? d.replace(/^sha256:/, '').slice(0, n) : '—');
+  const ts = (ms) => (ms ? new Date(ms).toISOString().slice(11, 19) + 'Z' : '—');
+  let auditReport = null, auditTamper = null;
+
+  function renderAuditStrip(a) {
+    if (!a) return;
+    $('audit-n').innerHTML = `${esc(a.entries)} <small>ENTRIES</small>`;
+    $('audit-meta').textContent = `${a.profile} · delivery ${a.delivery} · ${a.witness ? 'witness: Responsible Party' : 'no witness'} · ${short(a.ledger.ledgerId, 34)}`;
+    $('audit-pill').textContent = a.entries ? `${a.entries} recorded` : 'empty';
+    $('audit-pill').className = 'pill' + (a.entries ? ' ok' : '');
+  }
+
+  const DIM_NAMES = { cryptographicIntegrity: 'signatures', chainIntegrity: 'chain', checkpointIntegrity: 'root+proofs', anchorIntegrity: 'witness', scopeEvidenceCompleteness: 'complete', authorizedAsObserved: 'authz then', currentAuthorization: 'authz now' };
+  const VERDICT_SHORT = { valid: 'valid', invalid: 'INVALID', indeterminate: 'indeterm.' };
+  const dims = (report) => Object.entries(report || {}).filter(([, v]) => v && typeof v === 'object' && 'verdict' in v);
+  function verdictStrip(report, label) {
+    const d = dims(report);
+    const cards = d.map(([k, v]) => `<div class="verdict ${esc(v.verdict)}" title="${esc(k)}: ${esc(v.verdict)} ${esc((v.reasonCodes || []).join(', '))}"><div class="vn">${esc(DIM_NAMES[k] || k)}</div><div class="vv">${esc(VERDICT_SHORT[v.verdict] || v.verdict)}</div></div>`).join('');
+    const invalid = d.filter(([, v]) => v.verdict === 'invalid');
+    const indet = d.filter(([, v]) => v.verdict === 'indeterminate');
+    const reasons = invalid.length
+      ? `<b>${esc(label)}</b>: ${invalid.map(([k, v]) => esc(DIM_NAMES[k] || k) + ' → ' + esc(v.reasonCodes.map((r) => r.replace(/^AUDIT_/, '')).join(', '))).join(' · ')}`
+      : `<span class="ok">${esc(label)}: nothing invalid</span>`;
+    const note = indet.length ? ` · indeterminate = ${esc(indet.map(([, v]) => v.reasonCodes.map((r) => r.replace(/^AUDIT_/, '').toLowerCase().replace(/_/g, ' ')).join(', ')).join('; '))} (not in this bundle — honest)` : '';
+    return `<div class="verdicts">${cards}</div><div class="vr-line">${reasons}${note}</div>`;
+  }
+
+  function renderLedgerTable(r, tamper) {
+    const forgedSeq = tamper ? tamper.target.seq : null;
+    const breakSeq = tamper ? tamper.chainBreaksAt : null;
+    const rows = r.entries.map((e) => {
+      const cls = ['o-' + e.outcome, e.seq === forgedSeq ? 'forged' : '', e.seq === breakSeq ? 'break' : '', e.anchored ? '' : 'unanchored'].filter(Boolean).join(' ');
+      const out = e.seq === forgedSeq ? `<s>${esc(tamper.target.before)}</s>${esc(tamper.target.after)}` : esc(e.outcome);
+      const chain = e.seq === breakSeq ? `⛓ BREAK · names ${D(e.previousEntryDigest, 6)}, not the edit` : (e.previousEntryDigest ? `⛓ ${D(e.previousEntryDigest, 8)}` : 'genesis');
+      return `<tr class="${cls}" id="ledger-row-${esc(e.seq)}"><td class="seq">${esc(e.seq)}</td><td class="ev">${esc(e.eventType)}${e.tool ? ' <span class="muted">' + esc(e.tool) + '</span>' : ''}</td><td class="out">${out}</td><td class="reason"><span title="${esc(e.reason || '')}">${esc(e.reason || '')}</span></td><td class="digest">${D(e.entryDigest, 10)}</td><td class="chain">${chain}</td></tr>`;
+    }).join('');
+    $('audit-table').innerHTML = `<table class="ledger"><thead><tr><th>#</th><th>event · ${esc(r.entries[0] ? r.entries[0].at.slice(0, 10) : '')}</th><th>outcome</th><th>reason</th><th>entry digest</th><th>previous (chain)</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const box = $('audit-table');
+    const target = forgedSeq !== null ? $('ledger-row-' + forgedSeq) : null;
+    if (target) target.scrollIntoView({ block: 'center' }); else box.scrollTop = box.scrollHeight;
+    $('audit-chain-note').textContent = tamper ? `chain broken at #${tamper.chainBreaksAt ?? '—'}` : (r.chainIntact ? `${r.entries.length} entries · chain intact` : 'CHAIN BROKEN');
+    $('audit-chain-note').className = tamper || !r.chainIntact ? 'kill-line' : 'ok-line';
+  }
+
+  function renderTree(r, tamper) {
+    const forgedIdx = tamper ? Number(tamper.target.seq) : -1;
+    const dirty = (row) => { if (forgedIdx < 0 || row.leafIndex !== null) return false; const m = /^\[(\d+)\.\.(\d+)\]$/.exec(row.label); return !!m && forgedIdx >= Number(m[1]) && forgedIdx <= Number(m[2]); };
+    const root = r.tree[0];
+    $('audit-tree-root').className = 'tree-root' + (tamper ? ' bad' : '');
+    $('audit-tree-root').innerHTML = root ? `ROOT       <span class="h">${D(root.hash, 24)}</span>${tamper ? `   <span class="re">≠ recomputed after the edit  ${D(tamper.tamperedRoot, 16)}</span>` : '   ← signed · witnessed'}` : '';
+    $('audit-tree').innerHTML = r.tree.slice(1).map((row) => {
+      const cls = row.leafIndex !== null ? 'leaf' + (row.leafIndex === forgedIdx ? ' forged' : '') : 'node' + (dirty(row) ? ' dirty' : '');
+      return `<span class="row ${cls}" ${row.leafIndex === forgedIdx ? 'id="tree-forged"' : ''}>${esc(row.prefix)}${esc(row.label.padEnd(10))} <span class="h">${D(row.hash, 20)}</span>${row.leafIndex === forgedIdx && row.leafIndex !== null ? '  ✗ edited — every ancestor above it changes' : ''}</span>`;
+    }).join('');
+    const forgedEl = $('tree-forged');
+    if (forgedEl) forgedEl.scrollIntoView({ block: 'center' }); else $('audit-tree').scrollTop = 0;
+    $('audit-tree-note').textContent = `${r.inclusions.length} leaves · inclusion ${r.allIncluded ? '✓ all' : 'incomplete'}${r.unanchored ? ` · ${r.unanchored} newer unanchored` : ''}`;
+    $('audit-tree-note').className = r.allIncluded ? 'ok-line' : 'warn-line';
+  }
+
+  function renderAudit(r) {
+    auditReport = r; auditTamper = null;
+    $('audit-overlay').classList.add('on');
+    $('audit-title').className = 'title'; $('audit-title').innerHTML = 'AUDIT <span class="cut">TRAIL</span>';
+    $('audit-ledger-id').textContent = `${r.ledger.ledgerId} · ${r.ledger.ledgerEpochId}`;
+    renderLedgerTable(r, null);
+    const cp = r.checkpoint || {};
+    const w = r.witness;
+    $('audit-cp').innerHTML = `
+      <dt>root</dt><dd class="digest">${esc(cp.rootDigest || '—')}</dd>
+      <dt>covers</dt><dd class="hot">${esc(cp.treeSize || '—')} entries · seq 0…${esc(cp.treeSize ? cp.treeSize - 1 : '—')} · signed ${esc(ts(cp.createdAt))} · EdDSA · merchant key</dd>
+      <dt>witness</dt><dd class="${w ? 'ok' : 'amber'}">${w ? `${esc(w.observer.did)} · ${esc(ts(w.observedAt))} · receipt ${D(w.observationDigest, 10)} ✓` : (r.witnessError ? 'refused: ' + esc(r.witnessError) : 'none')}</dd>
+      <dt>assurance</dt><dd class="amber">${esc(r.profile.advertised)} advertised (in-memory journal; the SDK refuses more) · durable journal → AAP-3 · + witness → AAP-4</dd>`;
+    $('audit-cp-note').textContent = w ? 'RP countersigned ✓' : '';
+    $('audit-cp-note').className = 'ok-line';
+    renderTree(r, null);
+    $('audit-tamper-box').style.display = 'none';
+    $('audit-verdicts').innerHTML = '<div class="muted">press T to have an insider edit one entry, or E to export and verify offline</div>';
+    $('audit-verdict-note').textContent = '';
+    $('audit-export').innerHTML = '';
+    $('audit-foot').innerHTML = `<span>entry digest <b>sha256("org.kya-os.audit.entry.v1\\0" ‖ JCS(core))</b></span><span><b>RFC 9162</b> tree</span><span><b>JWS · EdDSA</b></span><span>bundle → <b>kya-audit verify</b> · <b>verify-ledger.py</b> (stdlib)</span>`;
+  }
+
+  function renderTamper(t) {
+    if (!auditReport) return;
+    auditTamper = t;
+    $('audit-title').className = 'title tampered'; $('audit-title').innerHTML = 'INSIDER <span class="cut">EDIT</span>';
+    $('audit-tamper-box').style.display = '';
+    $('audit-tamper-note').textContent = `#${t.target.seq} ${t.target.eventType}: ${t.target.before} → ${t.target.after}`;
+    $('audit-tamper-note').className = 'kill-line';
+    $('audit-tamper').innerHTML = `
+      <div class="tamper-banner">An <b>insider with the merchant's signing key</b> rewrites entry #${esc(t.target.seq)} (${esc(t.target.eventType)}${t.target.reason ? ', ' + esc(t.target.reason) : ''}) from <b>${esc(t.target.before)}</b> to <b>${esc(t.target.after)}</b>, recomputes its digests and re-signs the receipt — the signature <span class="ok">verifies</span>. Still caught, three ways:</div>
+      <dl class="kv tight" style="margin-top:6px">
+        <dt>chain</dt><dd class="kill-line">#${esc(t.chainBreaksAt ?? '—')} still names the honest digest as its predecessor → PREDECESSOR_MISMATCH</dd>
+        <dt>root</dt><dd class="kill-line">anchored ${D(t.anchoredRoot, 12)} ≠ recomputed ${D(t.tamperedRoot, 12)} → CHECKPOINT_ROOT_MISMATCH · the edited leaf's path no longer reaches the signed root → MERKLE_PROOF_INVALID</dd>
+        <dt>witness</dt><dd class="${t.witnessStillBindsAnchoredRoot ? 'ok' : 'amber'}">${t.witnessStillBindsAnchoredRoot ? 'the Responsible Party\'s receipt binds the honest root — re-signing the checkpoint would contradict a third party' : 'no witness receipt in this run'}</dd>
+      </dl>`;
+    const hv = dims(t.reports.honest);
+    $('audit-verdicts').innerHTML = verdictStrip(t.reports.tampered, 'edited bundle') + `<div class="vr-line"><span class="ok">honest bundle, same verifier · policy · keys: ${hv.filter(([, x]) => x.verdict === 'valid').length} valid · ${hv.filter(([, x]) => x.verdict === 'indeterminate').length} indeterminate · 0 invalid</span></div>`;
+    $('audit-verdict-note').textContent = 'verdict on the edited bundle';
+    $('audit-verdict-note').className = 'kill-line';
+    renderLedgerTable(auditReport, t);
+    renderTree(auditReport, t);
+  }
+
+  function renderExport(e) {
+    const v = (rep) => Object.values(rep).filter((x) => x && typeof x === 'object' && 'verdict' in x);
+    const bad = v(e.reports.tampered).filter((x) => x.verdict === 'invalid').length;
+    $('audit-export').innerHTML = `
+      <div>📦 <b style="color:var(--text)">var/audit/</b> ${e.components.map((c) => esc(c.path) + ' ' + esc(c.size) + ' B').join(' · ')} · policy.json · keys.json · manifest ${D(e.manifestDigest, 12)} signed</div>
+      <div style="margin-top:3px" title="${esc(e.command.honest)}"><code style="display:inline">npm run verify:ledger</code> → <span class="ok-line">exit 0</span> &nbsp; <code style="display:inline">npm run verify:ledger:tampered</code> → <span class="kill-line">exit 1 · ${esc(bad)} invalid</span> &nbsp; <code style="display:inline">npm run verify:ledger:py</code> → stdlib Python, no SDK · <a href="/api/audit/bundle" download>download</a></div>`;
+    if (!auditTamper) { $('audit-verdicts').innerHTML = verdictStrip(e.reports.honest, 'bundle.json'); $('audit-verdict-note').textContent = 'written to var/audit · trust from policy.json + keys.json, never from the bundle'; $('audit-verdict-note').className = 'ok-line'; }
+  }
+
+  async function actAudit() {
+    if (busy) return; setBusy(true);
+    try { const r = await api('/api/act/audit', {}); if (r.error) line(`anchor: ${esc(r.error)}`, 'warn-line'); else renderAudit(r); }
+    catch (err) { line(`anchor failed: ${esc(err.message)}`, 'kill-line'); }
+    setBusy(false);
+  }
+  async function actTamper() {
+    if (busy) return; setBusy(true);
+    try {
+      if (!auditReport) { const r = await api('/api/act/audit', {}); if (r.error) { line(`anchor: ${esc(r.error)}`, 'warn-line'); setBusy(false); return; } renderAudit(r); }
+      const t = await api('/api/act/tamper', {}); if (t.error) line(`tamper: ${esc(t.error)}`, 'warn-line'); else renderTamper(t);
+    } catch (err) { line(`tamper failed: ${esc(err.message)}`, 'kill-line'); }
+    setBusy(false);
+  }
+  async function actExport() {
+    if (busy) return; setBusy(true);
+    try {
+      if (!auditReport) { const r = await api('/api/act/audit', {}); if (r.error) { line(`anchor: ${esc(r.error)}`, 'warn-line'); setBusy(false); return; } renderAudit(r); }
+      const e = await api('/api/act/export', {}); if (e.error) line(`export: ${esc(e.error)}`, 'warn-line'); else renderExport(e);
+    } catch (err) { line(`export failed: ${esc(err.message)}`, 'kill-line'); }
+    setBusy(false);
+  }
+  const closeAudit = () => $('audit-overlay').classList.remove('on');
 
   // ── triggers (simulated agent). SSE renders the outcome. ──────────────────────
   async function trigger(path, opts) {
@@ -637,13 +927,21 @@
   $('btn-verify').onclick   = () => trigger('/api/act/verify-receipt', {});
   $('btn-revoke').onclick   = revokeAction;
   $('btn-reset').onclick    = actReset;
+  $('btn-audit').onclick    = actAudit;
+  $('btn-tamper').onclick   = actTamper;
+  $('btn-export').onclick   = actExport;
+  $('audit-close').onclick  = closeAudit;
   $('clear-log').onclick    = () => { log.innerHTML = ''; };
   $('jws-toggle').onclick   = () => { const j = $('jws'); if (j) { j.classList.toggle('open'); $('jws-toggle').textContent = j.classList.contains('open') ? 'collapse' : 'expand'; } };
   document.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'p' || e.key === 'P') { document.body.classList.toggle('presenter'); return; }
     if (e.key === 'c' || e.key === 'C') { document.body.classList.toggle('hc'); return; }
+    if (e.key === 'Escape') { closeAudit(); return; }
     if (busy) return;
+    if (e.key === 'a' || e.key === 'A') { if ($('audit-overlay').classList.contains('on') && auditReport && !auditTamper) closeAudit(); else actAudit(); return; }
+    if (e.key === 't' || e.key === 'T') { actTamper(); return; }
+    if (e.key === 'e' || e.key === 'E') { actExport(); return; }
     if (e.key === '0') $('btn-discover').click();
     if (e.key === '1') $('btn-order').click();
     if (e.key === '2') $('btn-wrong').click();

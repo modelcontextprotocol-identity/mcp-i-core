@@ -26,7 +26,7 @@ npm run demo           # RP hub on :4950, merchant edge on :4949
 open http://localhost:4949/
 ```
 
-Then, on the console, press the number keys in order: `0` discover · `1` order · `2` wrong product · `3` over cap · `5` stolen credential · `K` revoke · `4` try again · `V` re-verify the receipt in Python · `R` reset. `P` is presenter mode, `C` high contrast.
+Then, on the console, press the number keys in order: `0` discover · `1` order · `2` wrong product · `3` over cap · `5` stolen credential · `K` revoke · `4` try again · `V` re-verify the receipt in Python — then the finale: `A` anchor the audit ledger · `T` let an insider edit it · `E` export the replay bundle. `R` resets, `P` is presenter mode, `C` high contrast, `Esc` closes the ledger.
 
 The same beats from a terminal, if you prefer to read JSON:
 
@@ -58,6 +58,20 @@ npm run agent -- order --product risotto                   # DENIED · Credentia
 
 **V · Any merchant, any language.** `scripts/verify-receipt.py` re-verifies the receipt with zero dependencies: the merchant's key derived from its `did:key`, the Ed25519 signature with RFC 8032 math, both bound hashes recomputed over RFC 8785 canonical JSON. No SDK.
 
+
+**A · The trail.** Every decision above was recorded as it happened by the SDK's audit protocol (`@kya-os/mcp/audit`), wired into the same middleware that gated the calls with `delivery: 'required'` — a call the merchant cannot record is a call it refuses. Each entry is signed by the merchant's key and hash-chained to its predecessor; `A` signs an **RFC 9162 checkpoint** (a Merkle root over the entry digests) and asks the Responsible Party to **witness** it: the hub verifies the checkpoint against the merchant's DID, checks that it consistently extends the last one it saw (an RFC 9162 consistency proof, not just the chain link), and countersigns an observation receipt. The overlay shows the ledger, the tree, the root, the witness, and one inclusion proof per entry.
+
+**T · The insider.** Someone with the merchant's signing key and write access to the journal rewrites the most recent refusal as a success, recomputes its digests and re-signs its receipt. The signature verifies — and the SDK's offline verifier (`verifyAuditBundle`, trust supplied only by a policy and a key file) still reports `chainIntegrity: invalid [PREDECESSOR_MISMATCH]` and `checkpointIntegrity: invalid [CHECKPOINT_ROOT_MISMATCH, MERKLE_PROOF_INVALID]`, while `anchorIntegrity` stays valid because the Responsible Party's receipt names the honest root. Re-signing the checkpoint too would contradict a third party.
+
+**E · The take-home.** `E` writes the SDK's replay bundle (`entries`, `checkpoints`, `inclusion-proofs`, `observations`, a signed manifest with per-component digests) plus `policy.json` and `keys.json` to `var/audit/`, and the edited bundle beside it. Two independent verifiers re-check both:
+
+```bash
+npm run verify:ledger              # SDK CLI (kya-audit verify) → 7-dimension report, exit 0
+npm run verify:ledger:tampered     # the edited bundle → chain + checkpoint invalid, exit 1
+npm run verify:ledger:py           # scripts/verify-ledger.py: stdlib Python, no SDK, ~1,400 checks, exit 0
+```
+
+Honest labelling, enforced by the SDK: the journal is in-memory for the stage, so `assertAuditCapabilities` refuses to let this deployment advertise more than **AAP-1** ("Recorded"). The same code on a durable journal is AAP-3; with the witness, AAP-4. The console says so on the checkpoint card.
 
 Two beats the stage does not show but the tests do: the hub going **down** (status unresolvable → refused; this merchant's policy is fail-closed, and that choice is the merchant's, not the protocol's), and `OFFLINE=1` (the RP's DID document served from the hub's mirror, signatures still verified).
 
@@ -98,7 +112,7 @@ Merge `docs/claude_desktop_config.json` into your Claude Desktop config (absolut
 
 ### Presenter notes
 
-`P` hides the controls and enlarges the signal for a projector or a Meet screen share; `C` adds contrast for washed-out rooms. Rehearse once at 1280×720 — half the audience is remote. `R` issues a fresh grant at the next status-list index without restarting anything; `npm run revoke -- --index N --restore` clears a bit if you need the same index back.
+`P` hides the controls and enlarges the signal for a projector or a Meet screen share; `C` adds contrast for washed-out rooms. Rehearse once at 1280×720 — half the audience is remote. `R` issues a fresh grant at the next status-list index without restarting anything; `npm run revoke -- --index N --restore` clears a bit if you need the same index back. The audit ledger lives in the merchant process: restart `npm run demo` for a clean ledger before the show (the ledger of a rehearsal is real history, and the witness will refuse a checkpoint that does not extend what it already saw). `AUDIT_WITNESS=0` runs without the witness.
 
 ## What is real and what is a demo convenience
 
@@ -108,17 +122,19 @@ Merge `docs/claude_desktop_config.json` into your Claude Desktop config (absolut
 - The GS1 Digital Link scope is a **profile** of the existing CRISP scope (`{ resource, matcher: 'prefix' }`): no new mechanism, one convention. The handler adds a path-boundary re-check so `prefix` can never admit a longer GTIN.
 - The status list is hosted by the hub over plain HTTP on this laptop. Where you host it — your domain, a registry, a ledger (REVOKED anchored the same signed document on cheqd) — is policy; the protocol needs a URL and a signature. The hub keeps an append-only version history locally; a ledger makes that history one nobody can rewrite.
 - Payment is out of scope by design. The receipt says `authorized-for-capture`; spend enforcement and settlement stay with the merchant/PSP.
+- The audit trail is the shipped protocol end to end — recorder, journal, checkpoint builder, Merkle tree, observer, replay-bundle exporter and verifier are all `@kya-os/mcp/audit`; `src/merchant/audit.ts` only renders, forges and exports. The journal and checkpoint store are the SDK's in-memory providers (hence AAP-1). The witness runs inside the RP hub process for the stage; in production it is any party the merchant does not control.
+- The package's `kya-audit` bin only runs when invoked as `…/audit/cli.js` (its self-invocation guard does not recognise the npm bin shim), so the `verify:ledger` scripts call the file directly. A one-line fix upstream.
 
 ## Layout
 
 ```
-src/lib/        wiring (env, keys, paths) · mirror-capable fetch provider · HttpStatusListResolver · GS1 Digital Link + catalog
-src/rp/         the Responsible Party's hub: did.json, status list, issue, revoke, WebAuthn ceremony
-src/merchant/   the merchant edge: MCP server + shipped gate, place_order, discovery document, console API
+src/lib/        wiring (env, keys, paths) · key shims · mirror-capable fetch provider · HttpStatusListResolver · GS1 Digital Link + catalog
+src/rp/         the Responsible Party's hub: did.json, status list, issue, revoke, WebAuthn ceremony, audit witness
+src/merchant/   the merchant edge: MCP server + shipped gate, place_order, discovery document, console API, audit trail
 src/agent/      the agent: discover, order (MCP client + holder proof), Claude Desktop gateway
 web/            the console (index.html) and authenticator registration (setup-key.html)
-scripts/        setup.ts · verify-receipt.py (stdlib Python) · screenshot-run.py (headless smoke test)
-tests/          product/scope decisions · resolver fail-closed matrix · every beat end to end, incl. hub-down and offline
+scripts/        setup.ts · verify-receipt.py + verify-ledger.py (stdlib Python) · screenshot-run.py (headless smoke test)
+tests/          product/scope decisions · resolver fail-closed matrix · every beat end to end, incl. the finale, hub-down and offline
 ```
 
 `npm test` runs all of it in-process on ephemeral ports.

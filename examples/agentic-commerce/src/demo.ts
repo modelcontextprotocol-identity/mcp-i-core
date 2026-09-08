@@ -13,5 +13,5 @@ import { startRpServer } from './rp/server.js';
 import { startMerchantServer } from './merchant/server.js';
 
 startRpServer(RP_PORT);
-startMerchantServer();
-console.log(`\nConsole: http://localhost:${MERCHANT_PORT}/   (keys: 0 discover · 1 order · 2 wrong product · 3 over cap · 5 stolen credential · K revoke · 4 retry · V python re-verify · R reset · P presenter · C contrast)`);
+await startMerchantServer();
+console.log(`\nConsole: http://localhost:${MERCHANT_PORT}/   (keys: 0 discover · 1 order · 2 wrong product · 3 over cap · 5 stolen credential · K revoke · 4 retry · V python re-verify · A anchor ledger · T tamper · E export bundle · R reset · P presenter · C contrast)`);

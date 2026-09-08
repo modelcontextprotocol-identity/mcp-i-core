@@ -7,6 +7,9 @@
  *      every call (GET /status-list, Cache-Control: no-store).
  *   3. Issue and revoke the agent's delegation, the latter behind an
  *      authenticator touch when KEY_WEBAUTHN=1.
+ *   4. Witness the merchant's audit ledger: countersign each RFC 9162
+ *      checkpoint the merchant publishes (POST /api/rp/audit/observe), so the
+ *      merchant's history is pinned by a party it does not control.
  *
  * It is a SEPARATE process/origin from the merchant on purpose: the merchant
  * trusts the RP's signature, resolved through the RP's DID, not this server.
@@ -34,6 +37,7 @@ import { activeIndex, issueAndActivate, delegationFile } from './issue.js';
 import { revokeIndex, type RevokePhase } from './revoke.js';
 import { createKeyRoutes } from './key/webauthn-routes.js';
 import { hasAuthenticator, listAuthenticators } from './key/credential-store.js';
+import { createWitness, type Witness } from './witness.js';
 
 export const DID_DOCUMENT_FILE = path.join(RP_DIR, 'did.json');
 
@@ -206,12 +210,41 @@ export function createRpApp(config: RpAppConfig): Hono {
     performRevoke,
   }));
 
+  // ---- 4. witness the merchant's audit ledger ----------------------------------
+  // The SDK observer, keyed with the RP's did:web key; created on first use.
+  let witnessPromise: Promise<Witness> | null = null;
+  const witness = () => (witnessPromise ??= createWitness(identity, { acceptIssuer: () => config.merchantDid() }));
+
+  app.post('/api/rp/audit/observe', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { checkpoint?: unknown; consistency?: unknown } | null;
+    if (!body || typeof body !== 'object' || !body.checkpoint) return c.json({ error: 'expected { checkpoint, consistency? }' }, 400);
+    try {
+      const w = await witness();
+      const receipt = await w.observe(body as never);
+      const cp = (body.checkpoint as { core: { treeSize: string; rootDigest: string; ledgerId: string }; checkpointDigest: string });
+      broadcast({ type: 'witnessed', ledgerId: cp.core.ledgerId, treeSize: cp.core.treeSize, rootDigest: cp.core.rootDigest, checkpointDigest: cp.checkpointDigest, observationDigest: receipt.observationDigest, observations: w.observations });
+      return c.json({ receipt, observer: w.observer });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      broadcast({ type: 'witness_refused', message });
+      return c.json({ error: message }, 409);
+    }
+  });
+
+  app.get('/api/rp/audit/latest', async (c) => {
+    const ledgerId = c.req.query('ledgerId') ?? '';
+    const ledgerEpochId = c.req.query('ledgerEpochId') ?? '';
+    const w = await witness();
+    const latest = await w.latest(ledgerId, ledgerEpochId);
+    return c.json({ observer: w.observer, observations: w.observations, latest });
+  });
+
   app.get('/', (c) => c.json({
     role: 'responsible-party-hub',
     did: identity.did,
     didDocument: '/.well-known/did.json',
     statusList: '/status-list',
-    api: ['/api/rp/state', '/api/rp/issue', '/api/rp/revoke', '/api/rp/revoke/challenge', '/api/rp/revoke/execute', '/api/rp/key/list', '/api/rp/events'],
+    api: ['/api/rp/state', '/api/rp/issue', '/api/rp/revoke', '/api/rp/revoke/challenge', '/api/rp/revoke/execute', '/api/rp/key/list', '/api/rp/events', '/api/rp/audit/observe', '/api/rp/audit/latest'],
   }));
 
   return app;

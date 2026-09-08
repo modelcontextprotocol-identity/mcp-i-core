@@ -16,6 +16,11 @@
  *   3. /api/*             act routes the console uses. "Agent orders" drives a
  *                         real MCP client against our own /mcp.
  *   4. /                  the verifier console (web/).
+ *   5. /api/audit/*       the SHIPPED audit protocol: every gate decision above
+ *                         is a signed, hash-chained ledger entry; `A` anchors an
+ *                         RFC 9162 checkpoint (witnessed by the RP), `T` shows
+ *                         an insider's edit failing, `E` exports the replay
+ *                         bundle for `npx kya-audit verify`.
  *
  * Low-level SDK `Server` (not McpServer.registerTool): delegation-protected
  * tools receive `_kyaos_delegation` as a tool argument, and registerTool's zod
@@ -23,6 +28,7 @@
  */
 import http from 'node:http';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -56,7 +62,8 @@ import {
   type KeyedIdentity,
 } from '../lib/wiring.js';
 import { DemoFetchProvider } from '../lib/mirror-fetch.js';
-import { HttpStatusListResolver } from '../lib/http-statuslist-resolver.js';
+import { HttpStatusListResolver, ed25519PublicKeyBase64 } from '../lib/http-statuslist-resolver.js';
+import { createMerchantAudit } from './audit.js';
 import { CATALOG } from '../lib/product.js';
 import { buildDiscoveryDocument } from './well-known.js';
 import { decideOrder, summarizeMandate, type Mandate } from './place-order.js';
@@ -74,6 +81,10 @@ export interface MerchantAppConfig {
   allowInsecureLocalhost: boolean;
   statusCacheTtlMs: number;
   pythonVerifier: string | null;
+  /** Ask the Responsible Party to witness each audit checkpoint (AUDIT_WITNESS=0 to disable). */
+  witness: boolean;
+  /** Where exported replay bundles land (default var/audit). */
+  auditDir?: string;
 }
 
 export function merchantConfigFromEnv(overrides: Partial<MerchantAppConfig> = {}): MerchantAppConfig {
@@ -89,6 +100,7 @@ export function merchantConfigFromEnv(overrides: Partial<MerchantAppConfig> = {}
     allowInsecureLocalhost: env('ALLOW_INSECURE_LOCALHOST', '1') === '1',
     statusCacheTtlMs: Number(env('STATUS_CACHE_TTL_MS', '0')),
     pythonVerifier: path.join(EXAMPLE_ROOT, 'scripts', 'verify-receipt.py'),
+    witness: env('AUDIT_WITNESS', '1') === '1',
     ...overrides,
   };
 }
@@ -115,7 +127,7 @@ export function checksFromOutcome(verdict: 'allowed' | 'denied', code: string | 
   return { signature: 'fail', revocation: 'skip', holder: 'skip', product: 'skip', cap: 'skip', receipt: 'skip' };
 }
 
-export function createMerchant(config: MerchantAppConfig) {
+export async function createMerchant(config: MerchantAppConfig) {
   const { identity } = config;
 
   // ---- outbound trust: the RP's DID document + revocation list ----------------
@@ -137,6 +149,19 @@ export function createMerchant(config: MerchantAppConfig) {
     allowInsecureLocalhost: config.allowInsecureLocalhost,
   });
 
+  // ---- the shipped audit trail ----------------------------------------------------
+  // Every decision the gate makes below lands here as a signed, chained entry;
+  // `delivery: 'required'` means a call that cannot be recorded is refused.
+  const audit = await createMerchantAudit(identity, {
+    witnessUrl: config.witness ? `${config.rpOrigin}/api/rp/audit/observe` : undefined,
+    resolvePublicKeyBase64: async (signer) => {
+      const doc = await didResolver.resolve(signer.did);
+      const method = doc?.verificationMethod?.find((m) => m.id === signer.kid) ?? doc?.verificationMethod?.[0];
+      return method ? ed25519PublicKeyBase64(method) : null;
+    },
+    ...(config.auditDir ? { auditDir: config.auditDir } : {}),
+  });
+
   // ---- the shipped gate ---------------------------------------------------------
   const kyaos: KyaOsMiddleware = createKyaOsMiddleware(
     {
@@ -150,6 +175,7 @@ export function createMerchant(config: MerchantAppConfig) {
         // proof signed by the delegation SUBJECT's did:key.
         holderBinding: 'enforce',
       },
+      audit: audit.middlewareAudit,
     },
     cryptoProvider,
   );
@@ -178,6 +204,27 @@ export function createMerchant(config: MerchantAppConfig) {
       }
       lastMandate = summarizeMandate(vc);
       const outcome = decideOrder({ product: String(args['product'] ?? ''), quantity: Number(args['quantity'] ?? 1) }, vc);
+
+      // The handler's own two gates (product class, cap) go on the same ledger
+      // as the middleware's, with the merchant's reason codes. delivery is
+      // 'required': a decision the merchant cannot record is a sale it refuses.
+      const issuer = typeof vc.issuer === 'string' ? vc.issuer : vc.issuer.id;
+      const recorded = await audit.record({
+        eventType: outcome.ok ? 'authorization.approved' : 'authorization.denied',
+        action: { category: 'authorization', name: 'place_order' },
+        actor: { kind: 'pairwise_did', did: vc.credentialSubject.id },
+        responsibleParty: { kind: 'public_did', did: issuer },
+        resource: { kind: 'keyed_commitment', value: `sha256:${createHash('sha256').update(outcome.ok ? outcome.item.uri : String(args['product'] ?? '')).digest('hex')}`, keyId: 'gs1-digital-link' },
+        outcome: outcome.ok ? 'succeeded' : 'denied',
+        ...(outcome.ok ? {} : { reason: { code: outcome.error } }),
+        authorization: { source: 'delegation', decision: outcome.ok ? 'allowed' : 'denied', scopeId: 'commerce.order', ...(ref ? { delegationRef: ref } : {}) },
+        evidence: [],
+        details: { family: 'authorization', phase: outcome.ok ? 'approved' : 'denied' },
+      }).catch((err: unknown) => ({ status: 'failed' as const, error: err }));
+      if (recorded.status !== 'recorded') {
+        return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: 'AUDIT_UNAVAILABLE', message: 'Fail-closed: the merchant could not record this decision, so it will not act on it' }) }] };
+      }
+
       if (!outcome.ok) {
         return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: outcome.error, message: outcome.message, detail: outcome.detail ?? null, mandate: outcome.mandate }) }] };
       }
@@ -322,7 +369,55 @@ export function createMerchant(config: MerchantAppConfig) {
       lastReceipt: lastReceipt ? { at: lastReceipt.at, orderId: lastReceipt.body['orderId'] ?? null } : null,
       orders,
       catalog: CATALOG,
+      audit: { ledger: audit.ledger, recorder: audit.recorder, profile: audit.capabilities.profile, delivery: audit.capabilities.delivery, entries: (await audit.entries()).length, witness: config.witness ? `${config.rpOrigin}/api/rp/audit/observe` : null },
     });
+  });
+
+  // ---- the audit finale: ledger → checkpoint → witness → tamper → export ----------
+  app.get('/api/audit/ledger', async (c) => c.json(await audit.report()));
+
+  app.post('/api/act/audit', async (c) => {
+    const started = Date.now();
+    try {
+      const a = await audit.anchor();
+      const report = await audit.report();
+      broadcast({ type: 'audit', created: a.created, treeSize: a.checkpoint.core.treeSize, rootDigest: a.checkpoint.core.rootDigest, checkpointDigest: a.checkpoint.checkpointDigest, witnessed: !!a.witness, witnessError: a.witnessError, entries: report.entries.length, allIncluded: report.allIncluded, chainIntact: report.chainIntact, elapsedMs: Date.now() - started });
+      return c.json(report);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+    }
+  });
+
+  app.post('/api/act/tamper', async (c) => {
+    const started = Date.now();
+    try {
+      const t = await audit.tamper();
+      broadcast({ type: 'tamper', target: t.target, rootsMatch: t.rootsMatch, chainBreaksAt: t.chainBreaksAt, forgedInclusion: t.forgedInclusion, forgedReceiptVerifies: t.forgedReceiptVerifies, verdicts: verdictsOf(t.reports.tampered), elapsedMs: Date.now() - started });
+      return c.json(t);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+    }
+  });
+
+  app.post('/api/act/export', async (c) => {
+    const started = Date.now();
+    try {
+      const e = await audit.exportBundle();
+      broadcast({ type: 'export', bundleId: e.bundleId, manifestDigest: e.manifestDigest, files: e.files, command: e.command, verdicts: { honest: verdictsOf(e.reports.honest), tampered: verdictsOf(e.reports.tampered) }, elapsedMs: Date.now() - started });
+      return c.json(e);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+    }
+  });
+
+  app.get('/api/audit/bundle', async (c) => {
+    try {
+      const b = await audit.bundle();
+      c.header('Content-Disposition', `attachment; filename="kya-audit-bundle-${audit.ledger.ledgerEpochId}.json"`);
+      return c.json(b);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+    }
   });
 
   // The console is only a control plane: these drive THE AGENT — a real MCP
@@ -403,22 +498,33 @@ export function createMerchant(config: MerchantAppConfig) {
     await honoListener(req, res);
   });
 
-  return { app, httpServer, kyaos, statusListResolver, fetchProvider, discovery, broadcast };
+  return { app, httpServer, kyaos, statusListResolver, fetchProvider, discovery, broadcast, audit };
 }
 
-export function startMerchantServer(overrides: Partial<MerchantAppConfig> = {}) {
+/** The seven verdicts of an SDK verification report, compact for the event bus. */
+function verdictsOf(report: object): Record<string, { verdict: string; reasonCodes: string[] }> {
+  const out: Record<string, { verdict: string; reasonCodes: string[] }> = {};
+  for (const [k, v] of Object.entries(report as Record<string, unknown>)) {
+    if (v && typeof v === 'object' && 'verdict' in v) out[k] = v as { verdict: string; reasonCodes: string[] };
+  }
+  return out;
+}
+
+export async function startMerchantServer(overrides: Partial<MerchantAppConfig> = {}) {
   const config = merchantConfigFromEnv(overrides);
-  const merchant = createMerchant(config);
-  merchant.httpServer.listen(config.port, '127.0.0.1', () => {
+  const merchant = await createMerchant(config);
+  await new Promise<void>((resolve) => merchant.httpServer.listen(config.port, '127.0.0.1', () => {
     console.log(`Merchant edge: http://localhost:${config.port}`);
     console.log(`  console:    http://localhost:${config.port}/`);
     console.log(`  discovery:  http://localhost:${config.port}/.well-known/mcp`);
     console.log(`  MCP:        http://localhost:${config.port}/mcp`);
     console.log(`  did:        ${config.identity.did}`);
     console.log(`  trusts RP:  ${config.rpDid} (list: ${config.statusListUrl}${config.offline ? ', OFFLINE mirror' : ''})`);
-  });
+    console.log(`  audit:      ${merchant.audit.ledger.ledgerId} · ${merchant.audit.capabilities.profile} · delivery ${merchant.audit.capabilities.delivery}${config.witness ? ` · witness ${config.rpOrigin}` : ''}`);
+    resolve();
+  }));
   return { ...merchant, config };
 }
 
 const isMain = process.argv[1]?.endsWith('merchant/server.ts');
-if (isMain) startMerchantServer();
+if (isMain) void startMerchantServer();

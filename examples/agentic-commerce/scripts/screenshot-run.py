@@ -12,15 +12,15 @@ OUT = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith('--') else
 PRESENTER = '--presenter' in sys.argv
 os.makedirs(OUT, exist_ok=True)
 
-async def shot(page, name):
+async def shot(page, name, full=True):
     await page.wait_for_timeout(700)
-    await page.screenshot(path=f'{OUT}/{name}.png', full_page=True)
+    await page.screenshot(path=f'{OUT}/{name}.png', full_page=full)
     print('saved', name)
 
 async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch(executable_path=os.environ.get('CHROMIUM', '/opt/pw-browsers/chromium'))
-        page = await b.new_page(viewport={'width': 1440, 'height': 900})
+        page = await b.new_page(viewport={'width': int(os.environ.get('W', '1440')), 'height': int(os.environ.get('H', '900'))})
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
@@ -28,6 +28,7 @@ async def main():
         await page.wait_for_timeout(1500)
         if PRESENTER:
             await page.keyboard.press('p')
+        await page.keyboard.press('r'); await page.wait_for_timeout(1500)   # a fresh grant, whatever the last run left behind
         await shot(page, '00-ready')
         for key, name, wait in [('0', '01-discover', 800), ('1', '02-order', 1500), ('2', '03-wrong-product', 1200), ('3', '04-over-cap', 1200), ('5', '05-stolen', 1200)]:
             await page.keyboard.press(key)
@@ -36,10 +37,21 @@ async def main():
         await page.keyboard.press('v'); await page.wait_for_timeout(2500); await shot(page, '06-python')
         await page.keyboard.press('k'); await page.wait_for_timeout(1500); await shot(page, '07-revoked')
         await page.keyboard.press('4'); await page.wait_for_timeout(1500); await shot(page, '08-retry-denied')
-        await page.keyboard.press('r'); await page.wait_for_timeout(1500); await shot(page, '09-reset')
+        # the finale: anchor + witness, insider edit, export — full-screen overlay
+        await page.keyboard.press('a'); await page.wait_for_timeout(1800); await shot(page, '09-audit-anchored', full=False)
+        await page.keyboard.press('t'); await page.wait_for_timeout(2200); await shot(page, '10-audit-insider-edit', full=False)
+        await page.keyboard.press('e'); await page.wait_for_timeout(2500); await shot(page, '11-audit-exported', full=False)
+        audit = {
+            'title': await page.inner_text('#audit-title'),
+            'chain': await page.inner_text('#audit-chain-note'),
+            'tree': await page.inner_text('#audit-tree-note'),
+            'verdicts': await page.inner_text('#audit-verdicts'),
+        }
+        await page.keyboard.press('Escape'); await page.wait_for_timeout(400)
+        await page.keyboard.press('r'); await page.wait_for_timeout(1500); await shot(page, '12-reset')
         seal = await page.inner_text('#seal')
         code = await page.inner_text('#verdict-code')
-        print(json.dumps({'seal': seal, 'code': code, 'errors': errors}, indent=1))
+        print(json.dumps({'seal': seal, 'code': code, 'audit': audit, 'errors': errors}, indent=1))
         await b.close()
 
 asyncio.run(main())

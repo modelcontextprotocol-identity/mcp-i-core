@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "From agent-visible to agent-actionable: a shopping agent discovers a merchant's accepted trust schemes, presents a delegation scoped to a GS1 Digital Link product class, and is revoked mid-session by its Responsible Party — on the published @kya-os/mcp, did:web + a self-hosted StatusList2021.",
+  "description": "From agent-visible to agent-actionable: a shopping agent discovers a merchant's accepted trust schemes, presents a delegation scoped to a GS1 Digital Link product class, and is revoked mid-session by its Responsible Party \u2014 on the published @kya-os/mcp, did:web + a self-hosted StatusList2021.",
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -11,6 +11,9 @@
   "scripts": {
     "setup": "tsx scripts/setup.ts",
     "demo": "tsx src/demo.ts",
+    "verify:ledger": "node node_modules/@kya-os/mcp/dist/audit/cli.js verify var/audit/bundle.json --policy var/audit/policy.json --keys var/audit/keys.json",
+    "verify:ledger:tampered": "node node_modules/@kya-os/mcp/dist/audit/cli.js verify var/audit/bundle.tampered.json --policy var/audit/policy.json --keys var/audit/keys.json",
+    "verify:ledger:py": "python3 scripts/verify-ledger.py var/audit/bundle.json --keys var/audit/keys.json",
     "rp": "tsx src/rp/server.ts",
     "merchant": "tsx src/merchant/server.ts",
     "agent": "tsx src/agent/agent.ts",
