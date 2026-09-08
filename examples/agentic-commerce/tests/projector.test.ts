@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import { describe, expect, it, vi } from 'vitest';
 import { renderConsent } from '../src/rp/consent-page.js';
 import type { HumanAccount } from '../src/rp/human-identity.js';
@@ -43,10 +44,44 @@ class Element {
 
 // Extract the trusted local fixture script for VM execution, not HTML sanitization.
 function inlinePageScript(html: string): string {
-  const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i)?.[1];
-  if (script === undefined) throw new Error('The local page fixture has no inline script');
-  return script;
+  const scripts: string[] = [];
+  function visit(node: DefaultTreeAdapterTypes.Node) {
+    if ('tagName' in node && node.tagName === 'script') {
+      const type = (node.attrs.find(attr => attr.name === 'type')?.value ?? '').trim().toLowerCase();
+      if (!node.attrs.some(attr => attr.name === 'src')
+        && ['', 'text/javascript', 'application/javascript'].includes(type)) {
+        scripts.push(node.childNodes.map(child => 'value' in child ? child.value : '').join(''));
+      }
+    }
+    if ('childNodes' in node) node.childNodes.forEach(visit);
+  }
+  visit(parse(html));
+  if (scripts.length !== 1) {
+    throw new Error(`The local page fixture must contain exactly one inline classic script; found ${scripts.length}`);
+  }
+  return scripts[0]!;
 }
+
+describe('local fixture script selection', () => {
+  it('ignores external and data scripts instead of executing them in the page harness', () => {
+    const script = inlinePageScript('<script src="/external.js">throw new Error("external")</script>'
+      + '<script type="application/json">{"data":"fixture"}</script>'
+      + '<script>globalThis.fixtureExecuted = true;</script>');
+    const context = vm.createContext({});
+    vm.runInContext(script, context);
+    expect(context.fixtureExecuted).toBe(true);
+  });
+
+  it('fails clearly when a fixture contains no executable inline script', () => {
+    expect(() => inlinePageScript('<script type="application/json">{}</script>'))
+      .toThrow('The local page fixture must contain exactly one inline classic script; found 0');
+  });
+
+  it('fails clearly if a page gains a second inline script the harness would otherwise skip', () => {
+    expect(() => inlinePageScript('<script>first()</script><script>second()</script>'))
+      .toThrow('The local page fixture must contain exactly one inline classic script; found 2');
+  });
+});
 
 async function projector(initialChallenge?: Record<string, unknown>, credential: unknown = null,
   html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')) {
@@ -202,10 +237,15 @@ function namedGrant(displayName = 'Dylan Hobbs') {
   };
 }
 
+const scriptTagVariants = [
+  { name: 'uppercase script tags', closingTag: '</SCRIPT>' },
+  { name: 'browser-accepted closing-tag attributes', closingTag: '</SCRIPT\t\n bar>' },
+];
+
 describe('projector human-grant journey', () => {
-  it('executes the actual projector page when HTML uses uppercase script tags', async () => {
+  it.each(scriptTagVariants)('executes the actual projector page with $name', async ({ closingTag }) => {
     const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')
-      .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', '</SCRIPT>');
+      .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', closingTag);
     const p = await projector(undefined, namedGrant(), html);
     expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
     expect(p.get('verdict-code').textContent).toBe('GRANT ACTIVE · READY TO ORDER');
@@ -355,9 +395,9 @@ async function registrationPage(signedIn: boolean, displayName = 'Dylan Hobbs', 
 }
 
 describe('account-bound passkey registration page', () => {
-  it('executes the actual registration page when HTML uses uppercase script tags', async () => {
+  it.each(scriptTagVariants)('executes the actual registration page with $name', async ({ closingTag }) => {
     const html = fs.readFileSync(new URL('../web/setup-key.html', import.meta.url), 'utf8')
-      .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', '</SCRIPT>');
+      .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', closingTag);
     const page = await registrationPage(true, 'Workshop Test Human', 'Platform passkey', true, html);
     expect(page.get('account-name').textContent).toBe('Workshop Test Human');
     expect(page.get('go').disabled).toBe(false);
