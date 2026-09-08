@@ -51,6 +51,10 @@ async def assert_capability_consent(page, expected_bindings=None):
                         r'Use your saved payment methods', r'Ship to (?:your saved|new) addresses']:
         assert not re.search(unsupported, text, re.I), f'Unsupported demo consent claim: {unsupported}'
     await expect(screen.get_by_role('button', name='View policy', exact=True)).to_have_count(0)
+    await expect(page.locator('.grant-notice')).to_have_count(0)
+    for removed in ['Your Google account identifies you.', 'You can revoke this grant from the demo console',
+                    'Confirm with the passkey linked to this Google account']:
+        assert removed not in text, f'Removed notice copy is still visible: {removed}'
     expiry = page.locator('#grant-expiry')
     await expect(expiry).to_be_visible()
     hours = await expiry.get_attribute('data-valid-hours')
@@ -77,15 +81,26 @@ async def assert_capability_consent(page, expected_bindings=None):
     await expect(page.locator(APPROVE)).to_be_enabled()
     assert await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'Consent layout overflows its viewport'
     await page.evaluate('window.scrollTo(0, 0)')
-    if page.viewport_size and page.viewport_size['width'] >= 1000:
-        for region in [screen.locator('[slot="identity"]'), cards.get_by_text(GS1_SCOPE, exact=True),
-                       screen.locator('.amount'), expiry, page.locator(APPROVE)]:
-            await expect(region).to_be_in_viewport(ratio=1)
-        bounds = await page.locator(APPROVE).bounding_box()
-        assert bounds and 0 <= bounds['y'] and bounds['y'] + bounds['height'] <= page.viewport_size['height'], 'Projector approval must fit alongside identity, scope, cap and expiry without scrolling'
+    await assert_single_column_consent(page)
+
+
+async def assert_single_column_consent(page):
+    screen = page.locator(SCREEN)
+    card = await screen.locator('[part="card"]').bounding_box()
+    assert card and card['width'] <= 640, f'Consent card must stay at most 640px wide: {card}'
+    regions = [screen.locator('[slot="identity"]'), screen.locator('[part="agent"]'),
+               screen.locator('[part="permissions"]'), screen.locator('[slot="details"]'),
+               screen.locator('[slot="notice"]'), screen.locator('[part="actions"]')]
+    bounds = [await region.bounding_box() for region in regions if await region.is_visible()]
+    for previous, current in zip(bounds, bounds[1:]):
+        assert previous and current and current['y'] >= previous['y'] + previous['height'] - 1, 'Consent sections must follow one vertical column'
+    await expect(page.locator('.masthead')).to_have_count(0)
+    await expect(page.locator('main > .provenance')).to_have_count(0)
+    assert await page.locator('#decision-status').evaluate("node => !!node.closest('consent-capabilities-screen')"), 'Decision feedback must be inside the card'
 
 
 async def assert_mobile_consent(page):
     await expect(page.locator(APPROVE)).to_be_visible()
     await expect(page.locator(SCREEN).locator('consent-capability-card').get_by_text(GS1_SCOPE, exact=True)).to_be_visible()
     assert await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'Consent page overflows a 390px mobile viewport'
+    await assert_single_column_consent(page)

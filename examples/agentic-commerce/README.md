@@ -3,7 +3,9 @@
 A human grants a shopping agent authority to place an order for one GS1 Digital Link product class.
 The merchant verifies the grant, the agent's holder key, the CHF cap and the current revocation list before accepting the order.
 The Responsible Party can withdraw that authority mid-session.
-The signed, witnessed Merkle bundle records consent, issuance, allowed action, revocation and denial.
+The RP signs its consent, issuance and revocation ledger.
+The merchant signs its verification and order decisions, and the RP witnesses the merchant checkpoint.
+A consent reference inside the signed delegation connects the two histories.
 
 Built for the GS1/W3C workshop **Ecommerce for Humans and AI Agents**, Zurich, 9 September 2026.
 Talk: **From Agent-Visible to Agent-Actionable: KYA-OS, a Rail-Agnostic Trust Layer for E-commerce**.
@@ -34,7 +36,10 @@ Do not run the low-level `npm run issue` fixture utility for the live flow.
 
 Press `1` to request two risotto, **CHF 39.80**.
 The merchant returns `needs_authorization`, and the console displays **Open human consent** with the actual authorization URL.
-Open it, inspect the package-rendered consent page and click **Approve grant**.
+Click it to open a compact popup, inspect the package-rendered consent page and click **Approve grant**.
+The consent card stays in one column with a 640-pixel maximum width; scroll to review its limits and actions.
+Approval, denial and errors appear inside the card, and **Back to demo** returns you to the projector.
+If popups are blocked, the link retains its normal browser navigation.
 Return to the console and press `4` to retry the same order.
 The order is authorized.
 Press `K` to revoke, then `4` again to see the denial.
@@ -47,9 +52,9 @@ npm run demo:restart
 
 Stop the previous demo with `Ctrl+C` first.
 This command checks for occupied demo ports before changing state, prepares a fresh run, then starts both services.
-`R` on the console clears the active grant and pending consent sessions without restarting the services.
+`R` on the console revokes the current RP grant, clears the gateway’s own grant cache and invalidates pending consent sessions without restarting the services.
 It never issues a replacement grant; the next request needs human approval.
-Restart the process for a clean in-memory audit ledger.
+Restarting starts a fresh merchant in-memory ledger; the RP replays retained consent events into a new ledger epoch.
 If using Google, sign in after the final restart: Google sessions and pending logins are intentionally in memory; account references and registered keys persist.
 
 ## Dylan's four-minute run of show: nine beats
@@ -68,7 +73,7 @@ Default spoken path: **click-wrap issue → status-list revoke**.
 | 6 | 2:00 | Return to Claude: **Retry the exact same place_order with the same product and quantity.** | Two risotto, CHF 39.80, authorized with a signed receipt. |
 | 7 | 2:30 | `npm run revoke` | The RP flips the active grant's status-list bit and publishes a newly signed list. |
 | 8 | 2:50 | In Claude: **Retry the exact same place_order again.** | Revoked denial; the agent still holds its key and credential. |
-| 9 | 3:15 | On the console press `E`, then run `npm run verify:ledger` and `npm run verify:ledger:py`. | Consent → delegation → allow → revoke → deny, with a verified honest Merkle bundle. |
+| 9 | 3:15 | On the console press `E`, then run `npm run verify:ledger` and `npm run verify:ledger:py`. | Merchant decisions in a witnessed bundle; the grant panel links the separate RP consent ledger and signed bundle. |
 
 Pinned Claude prompt, with exact tool, GTIN, URI, quantity and cap:
 
@@ -158,12 +163,19 @@ The merchant enforces delegation using the published `@kya-os/mcp` package; the 
 The agent requires `MERCHANT_DID`; setup writes it to `.env.local`, which the demo loads.
 
 The gateway signs each tool request with the agent's private key, verifies the merchant's response proof before exposing the authorization URL, and remembers the pending resume token.
-The approved credential is reloaded from the shared agent store on the next call.
-For the first retry, the gateway attaches the new credential, the matching resume token and a fresh holder-of-key proof.
-That first order may use any quantity or product instance within the approved product class and per-order cap; it need not repeat the order that triggered consent.
-Out-of-scope or over-cap attempts are refused before consuming the token.
+On the next call, the agent authenticates to the RP’s `/consent/pickup` endpoint with a fresh proof, verifies the signed reply and stores the credential in its own `var/agent/state.json`.
+The RP never writes into that store.
+Every order carries the credential and a fresh holder-of-key proof.
+The resume token identifies the RP consent and pickup flow; it is not sent with orders.
+An order may use any quantity or product instance within the approved product class and per-order cap; it need not repeat the order that triggered consent.
+Out-of-scope or over-cap attempts are refused without disabling the grant.
 Private keys and proof arguments are kept out of the model's tool arguments and projector output.
-The projector deliberately displays the authorization URL, including its one-use resume token, so the human can open consent.
+The projector deliberately displays the authorization URL and resume token so the human can open consent.
+The human must decide within the ten-minute challenge window, and a decision cannot issue twice.
+An approved credential remains recoverable after that deadline through repeatable pickup with a fresh agent proof.
+Its own validity window and current revocation status still govern order authorization.
+A lost order response does not disable the grant or trigger an automatic order retry.
+This demo does not implement transaction idempotency: a new request with a fresh proof is a new order, so an uncertain earlier result needs reconciliation before repeating that purchase.
 
 **Stateless refers to the MCP transport:** each HTTP request is handled independently, with no `Mcp-Session-Id` or remembered MCP protocol session required.
 The agent's reusable key and delegation, the RP's consent records and the revocation list remain application state.
@@ -215,10 +227,16 @@ The consent integration handles its configured origin separately from the existi
 If no authenticator is registered, the page offers registration and preserves the default click-wrap fallback.
 Switch back to `CONSENT_WEBAUTHN=0` for the spoken run if the laptop or badge is unreliable.
 
-`KEY_WEBAUTHN=1` independently enables the existing touch-to-revoke ceremony.
-`DEMO_BYPASS_WEBAUTHN=1` remains the existing revocation bypass.
-Do not require both ceremonies during the four-minute talk.
+`KEY_WEBAUTHN=1` independently requires a registered passkey or security key for the console's `K` / Revoke action.
+The assertion is bound to the exact status-list URL, grant index and a single-use nonce.
+Cancelling the prompt sends no revocation; an empty key store blocks the action instead of falling back to software.
+Set `KEY_WEBAUTHN=1` in `.env.local` and restart the demo to use this alongside passkey consent.
+`DEMO_BYPASS_WEBAUTHN=1` remains an explicit development bypass.
+The CLI and demo reset are trusted local operator shortcuts, not passkey-protected public revocation APIs.
+Revoking without an active grant is refused, and the console distinguishes a published revocation from an unavailable audit export.
+If a completion response is lost, it reads back the same grant's status without resending the mutation.
 The browser regression `npm run test:webauthn:browser` uses Chromium's virtual authenticator to exercise real registration, issuance assertion verification, order, software revoke and denial without physical hardware.
+Add `--passkey-revocation` to `scripts/test-consent-webauthn.py` to also test passkey cancellation, successful revocation, nonce replay rejection and lost-response recovery.
 It uses the same Playwright and `CHROMIUM` prerequisites as the capture script.
 
 ## Show the human behind the agent
@@ -256,7 +274,8 @@ Keys registered before Google sign-in remain anonymous and need fresh account-bo
 Google sessions expire and end when the RP process restarts; the account references and registered keys persist.
 
 The existing signed credential metadata contains `demoConsent`: an opaque account reference, Google issuer and display name, consent reference, passkey reference, approval time and issuance-intent hash.
-The same snapshot is committed by the consent audit events.
+The RP commits the same snapshot in its own consent audit events.
+The merchant verifies this RP attestation; it does not claim to have observed the Google login or authenticator ceremony.
 The raw Google subject, email, identity token and access tokens are excluded from this signed public metadata.
 The RP remains the credential issuer and the shopping agent remains its subject.
 Neither the name nor the device label is used to make authorization decisions.
@@ -276,7 +295,7 @@ npm run demo:e2e
 ```
 
 The end-to-end suite uses ephemeral ports and no model.
-It covers a fresh agent, proof-bound authorization URL, real consent HTML, selected-scope persistence, denial, issuance, grant-bound first use, independent receipt verification, wrong GTIN, cap, revoked status, expired and mismatched consent, and the audit export and tamper checks.
+It covers a fresh agent, proof-bound authorization URL, real consent HTML, selected-scope persistence, denial, issuance, late and repeated credential pickup, lost order responses, request-proof replay rejection, independent receipt verification, wrong GTIN, cap, revoked status, expired and mismatched consent, and the audit export and tamper checks.
 The existing product boundary, resolver fail-closed and holder-binding checks remain in place.
 The seven projector gates distinguish signature, holder, consent, scope, cap, revocation and order decisions.
 The projector tests execute the page's actual SSE handlers for absent grants, safe consent links, approval, denial and reset.
@@ -294,7 +313,7 @@ The tampered bundle must exit **1** with integrity failures; that deliberate rej
 The SDK verifier reports separate dimensions for signatures, chain, checkpoint, witness and authorization evidence.
 An `indeterminate` evidence dimension is distinct from an invalid signature or Merkle proof.
 The in-memory journal advertises AAP-1, as enforced by the SDK; the witness is real, but it does not turn this demo into a durable journal.
-The existing audit implementation, status-list resolver, GS1 policy and verifier scripts remain the source of truth.
+Both ledgers reuse the same published SDK composition; the status-list resolver, GS1 policy and verifier scripts remain the source of truth.
 
 ## Recorded fallback and browser rehearsal
 
@@ -343,7 +362,12 @@ The localhost issuer is already the Responsible Party, so the human's explicit b
 The response proof for `needs_authorization` binds the whole challenge body, including `authorizationUrl`.
 The RP confirms the pending session, agent, scopes, merchant audience and expiry before issuing through `issueDelegation` / `issueAndActivate`.
 The issuer uses `DelegationCredentialIssuer.createAndIssueDelegation` without inventing a different credential shape.
-The agent store is `var/active-index.json` plus `var/delegation-<index>.json`.
+The RP owns `var/rp/consent/flows.json` and `var/rp/credentials/`.
+The agent owns `var/agent/state.json`; the merchant verifies consent from the signed credential without a consent-use store.
+Every approved credential carries a `metadata.consent` attestation binding the consent reference, agent, merchant, selected scopes, per-order cap, duration and authentication method.
+The merchant verifies that attestation after the shipped credential verifier passes.
+It never reads the RP’s consent files.
+See [party boundaries and wire evidence](docs/party-boundaries.md) for the HTTP exchange, audit ownership, and isolated-process acceptance test.
 A denied, expired, modified or reused consent decision cannot issue a new grant.
 
 For local or offline rehearsal the default RP DID resolves to this laptop.

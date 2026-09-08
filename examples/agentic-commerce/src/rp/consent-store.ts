@@ -1,5 +1,4 @@
-/** Shared localhost consent state. Atomic rename and an exclusive filesystem lock
- * preserve single-use decisions across the RP and merchant processes. */
+/** Private RP consent state. Atomic writes preserve single-use human decisions. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -8,27 +7,9 @@ import { writeJsonAtomic } from '../lib/atomic-json.js';
 import { parseDigitalLink } from '../lib/product.js';
 import { VAR_DIR, RP_PORT } from '../lib/wiring.js';
 
-export interface ConsentBindings {
-  agentDid: string;
-  audience: string;
-  product: string;
-  quantity: number;
-  productClass: string;
-  cap: string;
-  currency: string;
-  validHours: number;
-  authorizationOrigin?: string;
-  requestHash?: string;
-}
-export interface ConsentChallenge {
-  error: 'needs_authorization';
-  message: string;
-  authorizationUrl: string;
-  resumeToken: string;
-  expiresAt: number;
-  scopes: string[];
-  display: { title: string; hint: Array<'link'> };
-}
+import type { ConsentBindings, ConsentChallenge } from '../lib/consent-contract.js';
+export type { ConsentBindings, ConsentChallenge } from '../lib/consent-contract.js';
+import { tokenReference } from '../lib/consent-evidence.js';
 export interface ConsentFlow {
   challenge: ConsentChallenge;
   bindings: ConsentBindings;
@@ -76,7 +57,7 @@ export class ConsentFlowStore {
   readonly dir: string;
   private readonly now: () => number;
   constructor(options: { dir?: string; now?: () => number } = {}) {
-    this.dir = options.dir ?? path.join(VAR_DIR, 'consent');
+    this.dir = options.dir ?? path.join(VAR_DIR, 'rp', 'consent');
     this.now = options.now ?? Date.now;
   }
   private read(): StoreData {
@@ -147,10 +128,10 @@ export class ConsentFlowStore {
         'consent_missing',
         'Consent request does not exist.',
       );
-    if (flow.challenge.expiresAt <= Math.floor(this.now() / 1000))
+    if (flow.state === 'pending' && flow.challenge.expiresAt <= Math.floor(this.now() / 1000))
       throw new ConsentFlowError(
         'consent_expired',
-        'Consent resume token expired. Request a fresh authorization.',
+        'Consent decision deadline expired. Request a fresh authorization.',
       );
     return flow;
   }
@@ -322,8 +303,10 @@ export class ConsentFlowStore {
         flow.credentialDigest = `sha256:${createHash('sha256').update(canonicalizeJSON(vc)).digest('hex')}`;
         flow.index = Number(vc.credentialStatus?.statusListIndex);
         const demoConsent = vc.credentialSubject?.delegation?.metadata?.['demoConsent'];
+        const consent = vc.credentialSubject?.delegation?.metadata?.['consent'] as { consentRef?: string } | undefined;
         const payload = {
           resumeTokenHash: createHash('sha256').update(token).digest('hex'),
+          consentRef: tokenReference(token),
           agentDid: flow.bindings.agentDid,
           audience: flow.bindings.audience,
           credentialId: vc.id,
@@ -333,6 +316,7 @@ export class ConsentFlowStore {
           cap: flow.bindings.cap,
           currency: flow.bindings.currency,
           at: flow.decidedAt,
+          ...(consent ? { consentRef: consent.consentRef } : {}),
           ...(authentication ? { authentication } : {}),
           ...(demoConsent ? { demoConsent } : {}),
         };
@@ -382,6 +366,7 @@ export class ConsentFlowStore {
         actor: responsibleParty ?? flow.bindings.agentDid,
         payload: {
           resumeTokenHash: createHash('sha256').update(token).digest('hex'),
+          consentRef: tokenReference(token),
           agentDid: flow.bindings.agentDid,
           audience: flow.bindings.audience,
           scope: flow.bindings.productClass,

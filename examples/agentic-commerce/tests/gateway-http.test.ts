@@ -185,7 +185,7 @@ describe('Claude connector at /agent/mcp', () => {
       expect(body).toMatchObject({ error: 'needs_authorization', scopes: [scope] });
       tokens.push(body.resumeToken);
     }
-    expect(new Set(tokens).size).toBe(3);
+    expect(new Set(tokens).size).toBe(1); // Transport is stateless; the pending human grant stays stable.
     for (const response of [catalog, await callTool('browse_catalog')]) {
       expect(response.isError).toBeFalsy();
       expect(textOf(response)).toMatch(/risotto/i);
@@ -267,8 +267,9 @@ describe('Claude connector at /agent/mcp', () => {
 
     const ledger = await (await fetch(`${merchantOrigin}/api/audit/ledger`)).json();
     const types = ledger.entries.map((entry: { eventType: string }) => entry.eventType);
-    expect(types).toEqual(expect.arrayContaining(['consent.denied', 'consent.approved', 'delegation.issued', 'authorization.approved', 'delegation.revoked', 'authorization.denied']));
-    expect(types.indexOf('consent.approved')).toBeLessThan(types.indexOf('authorization.approved'));
-    expect(types.slice(types.indexOf('delegation.revoked') + 1)).toContain('authorization.denied');
+    expect(types).toEqual(expect.arrayContaining(['credential.verified', 'authorization.approved', 'authorization.denied']));
+    expect(types).not.toContain('consent.approved');
+    const rpLedger = await (await fetch(`${rpOrigin}/api/rp/audit/ledger`)).json();
+    expect(rpLedger.entries.map((entry: { eventType: string }) => entry.eventType)).toEqual(expect.arrayContaining(['consent.denied', 'consent.approved', 'delegation.issued', 'delegation.revoked']));
   });
 });

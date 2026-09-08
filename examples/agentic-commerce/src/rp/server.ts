@@ -41,6 +41,10 @@ import { ensureStatusList, loadStatusList, loadStatusListMeta, readBit, RP_DIR }
 import { activeIndex, activeCredentialOrNull, clearActiveCredential } from './issue.js';
 import { createConsentRoutes } from './consent.js';
 import { ConsentFlowStore } from './consent-store.js';
+import { ConsentProtocol, signMessage, type SignedMessage } from '../lib/consent-protocol.js';
+import { createRpAudit } from './audit.js';
+import type { ConsentBindings } from './consent-store.js';
+import { consentDigest } from '../lib/consent-evidence.js';
 import { revokeIndex, type RevokePhase } from './revoke.js';
 import { createKeyRoutes } from './key/webauthn-routes.js';
 import { hasAuthenticator, listAuthenticators } from './key/credential-store.js';
@@ -90,7 +94,12 @@ export function createRpApp(config: RpAppConfig): Hono {
   const signingFunction = makeVcSigningFunction(identity.privateKeyBase64);
   const googleOrigin = config.googleOrigin ?? new URL(config.statusListUrl).origin.replace('127.0.0.1', 'localhost');
   const identityAuth = config.identityAuth ?? new GoogleIdentity({ clientId: config.googleClientId, origin: googleOrigin });
-  const keyRequired = () => config.keyWebauthn && !config.bypassWebauthn && hasAuthenticator();
+  // A missing key must not silently downgrade an explicitly gated deployment.
+  const keyRequired = () => config.keyWebauthn && !config.bypassWebauthn;
+  const revocableIndex = () => activeCredentialOrNull() ? activeIndex() : null;
+  const consentStore = new ConsentFlowStore();
+  const consentAudit = createRpAudit(identity, consentStore);
+  const protocol = new ConsentProtocol(identity.did, new URL(config.statusListUrl).origin);
 
   app.use('/api/*', cors({ origin: config.corsOrigins, credentials: identityAuth.enabled }));
   app.use('/status-list', cors({ origin: '*' }));
@@ -120,7 +129,56 @@ export function createRpApp(config: RpAppConfig): Hono {
     c.header('Cache-Control', 'no-store');
     return c.html(fs.readFileSync(path.join(WEB_DIR, 'setup-key.html'), 'utf8'));
   });
-  app.route('/', createConsentRoutes({ identity, statusListUrl: config.statusListUrl, agentDid: config.agentDid, merchantDid: config.merchantDid, broadcast, consentWebauthn: config.consentWebauthn, identityAuth }));
+  // Each party authenticates protocol messages using its own verifier and key.
+  // The merchant never creates or opens this RP's private flow store.
+  async function readMessage(c: import('hono').Context): Promise<SignedMessage> {
+    const raw = await c.req.text();
+    if (Buffer.byteLength(raw) > 65_536) throw new Error('Consent protocol request too large');
+    return JSON.parse(raw) as SignedMessage;
+  }
+  app.post('/consent/requests', async (c) => {
+    try {
+      const message = await readMessage(c);
+      const body = await protocol.verify('consent.create', message, config.merchantDid(), identity.did);
+      const bindings = body['bindings'] as ConsentBindings;
+      const agentRequest = body['agentRequest'] as Record<string, unknown>;
+      if (!bindings || bindings.agentDid !== config.agentDid() || bindings.audience !== config.merchantDid()
+        || typeof bindings.productClass !== 'string' || typeof bindings.cap !== 'string' || typeof bindings.currency !== 'string'
+        || !Number.isFinite(bindings.validHours) || bindings.validHours <= 0 || !agentRequest
+        || bindings.product !== agentRequest['product'] || bindings.quantity !== (agentRequest['quantity'] ?? 1)) throw new Error('Consent request bindings differ');
+      await protocol.verify('place_order', { body: agentRequest, proof: agentRequest['_kyaos_proof'] as SignedMessage['proof'] }, config.agentDid(), config.merchantDid());
+      const authorizationOrigin = (identityAuth.enabled || config.consentWebauthn) ? googleOrigin : new URL(config.statusListUrl).origin;
+      const challenge = consentStore.create({ ...bindings, authorizationOrigin });
+      return c.json(await signMessage('consent.create.result', { requestNonce: message.proof.meta.nonce, challenge }, identity, config.merchantDid()));
+    } catch { return c.json({ error: 'CONSENT_REQUEST_INVALID', message: 'A fresh merchant request and bound agent proof are required.' }, 400); }
+  });
+  app.post('/consent/pickup', async (c) => {
+    try {
+      const message = await readMessage(c);
+      const body = await protocol.verify('consent.pickup', message, config.agentDid(), identity.did);
+      const token = String(body['resumeToken'] ?? '');
+      const flow = consentStore.get(token);
+      if (!flow || flow.bindings.agentDid !== config.agentDid() || flow.bindings.audience !== body['audience']) throw new Error('Pickup binding differs');
+      let result: Record<string, unknown> = { state: flow.state };
+      // The challenge deadline limits the human decision, not delivery of an
+      // already issued grant. Credential lifetime and revocation are separate.
+      if (flow.state === 'pending' && flow.challenge.expiresAt <= Math.floor(Date.now() / 1000)) result = { state: 'expired' };
+      else if (flow.state === 'approved' || flow.state === 'consumed') {
+        // Required RP recording precedes delivery. Repeated pickup with a fresh
+        // holder proof is idempotent, so a lost HTTP response cannot lose a grant.
+        await consentAudit.flush();
+        const vc = flow.file ? readJson<import('@kya-os/mcp').DelegationCredential>(flow.file) : null;
+        if (!vc || flow.credentialDigest !== consentDigest(vc)) throw new Error('Issued credential unavailable');
+        if (consentStore.get(token)?.state === 'approved') consentStore.consume(token, {
+          agentDid: flow.bindings.agentDid, audience: flow.bindings.audience,
+          credentialId: flow.credentialId!, credentialDigest: flow.credentialDigest!,
+        });
+        result = { state: 'approved', credential: vc };
+      }
+      return c.json(await signMessage('consent.pickup.result', { requestNonce: message.proof.meta.nonce, ...result }, identity, config.agentDid()));
+    } catch { return c.json({ error: 'CONSENT_PICKUP_INVALID', message: 'Credential pickup requires its bound agent and a fresh proof.' }, 400); }
+  });
+  app.route('/', createConsentRoutes({ identity, statusListUrl: config.statusListUrl, agentDid: config.agentDid, merchantDid: config.merchantDid, broadcast, consentWebauthn: config.consentWebauthn, identityAuth, store: consentStore, recordDecision: () => consentAudit.export() }));
 
   // ---- 1. identity ----------------------------------------------------------
   app.get('/.well-known/did.json', (c) => {
@@ -140,8 +198,8 @@ export function createRpApp(config: RpAppConfig): Hono {
   app.get('/api/rp/state', async (c) => {
     const list = loadStatusList();
     const meta = loadStatusListMeta();
-    const index = activeIndex();
-    const bit = list ? await readBit(list, index) : null;
+    const index = revocableIndex();
+    const bit = list && index !== null ? await readBit(list, index) : null;
     let authenticators: ReturnType<typeof listAuthenticators> = [];
     let authenticatorStoreError: string | null = null;
     try { authenticators = listAuthenticators(); } catch (error) { authenticatorStoreError = error instanceof Error ? error.message : 'Authenticator store unavailable'; }
@@ -157,7 +215,7 @@ export function createRpApp(config: RpAppConfig): Hono {
       consentWebauthn: config.consentWebauthn ?? false,
       googleIdentityEnabled: identityAuth.enabled,
       revoked: bit,
-      keyRequired: config.keyWebauthn && !config.bypassWebauthn && (authenticatorStoreError !== null || authenticators.length > 0),
+      keyRequired: keyRequired(),
       authenticatorStoreError,
       keySetup: config.keySetup,
       authenticators: authenticators.map((a) => ({ label: a.label, idTail: a.id.slice(-6) })),
@@ -166,8 +224,10 @@ export function createRpApp(config: RpAppConfig): Hono {
 
   // ---- 3a. issue -------------------------------------------------------------
   app.post('/api/rp/issue', (c) => c.json({ error: 'consent_required', message: 'Place an order and approve the signed authorization URL. Direct issuance is disabled.' }, 403));
-  app.post('/api/rp/reset', (c) => {
-    clearActiveCredential(); new ConsentFlowStore().invalidatePending();
+  app.post('/api/rp/reset', async (c) => {
+    if (activeCredentialOrNull()) await revokeIndex(activeIndex(), { identity, statusListUrl: config.statusListUrl });
+    await consentAudit.flush();
+    clearActiveCredential(); consentStore.invalidatePending();
     broadcast({ type: 'grant.reset' });
     return c.json({ success: true, grantIssued: false, message: 'The agent starts with no grant. Place an order to request fresh human consent.' });
   });
@@ -180,11 +240,26 @@ export function createRpApp(config: RpAppConfig): Hono {
   // ---- 3b. revoke --------------------------------------------------------------
   async function performRevoke(index: number) {
     broadcast({ type: 'revoke_start', index });
-    const result = await revokeIndex(index, {
-      identity,
-      statusListUrl: config.statusListUrl,
-      onPhase: (p: RevokePhase) => broadcast({ type: 'revoke_phase', index, ...p }),
-    });
+    let result;
+    try {
+      result = await revokeIndex(index, {
+        identity,
+        statusListUrl: config.statusListUrl,
+        onPhase: (p: RevokePhase) => broadcast({ type: 'revoke_phase', index, ...p }),
+      });
+    } catch (error) {
+      broadcast({ type: 'revoke_failed', index, message: 'Revocation could not be confirmed. Check the current status list.' });
+      throw error;
+    }
+    try {
+      await consentAudit.export();
+      result.audit = 'recorded';
+    } catch (error) {
+      // Publication is already verified. Export failure cannot undo revocation.
+      // Retained RP source events remain available for the next export attempt.
+      console.error('Revocation published; RP audit export unavailable:', error);
+      result.audit = 'unavailable';
+    }
     broadcast({ type: 'revoke_done', ...result });
     return result;
   }
@@ -197,7 +272,8 @@ export function createRpApp(config: RpAppConfig): Hono {
     }
     const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
     const requested = Number((body as Record<string, unknown>)['index']);
-    const index = Number.isInteger(requested) && requested >= 0 ? requested : activeIndex();
+    const index = Number.isInteger(requested) && requested >= 0 ? requested : revocableIndex();
+    if (index === null) return c.json({ error: 'no_active_grant', message: 'There is no active grant to revoke. Approve a grant first.' }, 409);
     const restore = Boolean((body as Record<string, unknown>)['restore']);
     if (restore) {
       const result = await revokeIndex(index, { restore: true, identity, statusListUrl: config.statusListUrl });
@@ -215,7 +291,7 @@ export function createRpApp(config: RpAppConfig): Hono {
     identityAuth,
     ...(identityAuth.enabled ? { registrationOrigin: googleOrigin } : {}),
     statusListUrl: () => config.statusListUrl,
-    currentIndex: () => activeIndex(),
+    currentIndex: revocableIndex,
     performRevoke,
   }));
 
@@ -247,13 +323,16 @@ export function createRpApp(config: RpAppConfig): Hono {
     const latest = await w.latest(ledgerId, ledgerEpochId);
     return c.json({ observer: w.observer, observations: w.observations, latest });
   });
+  app.get('/api/rp/audit/ledger', async (c) => c.json(await (await consentAudit.flush()).report()));
+  app.get('/api/rp/audit/bundle', async (c) => c.json(await (await consentAudit.flush()).bundle()));
+  app.post('/api/rp/audit/export', async (c) => c.json(await consentAudit.export()));
 
   app.get('/', (c) => c.json({
     role: 'responsible-party-hub',
     did: identity.did,
     didDocument: '/.well-known/did.json',
     statusList: '/status-list',
-    api: ['/api/rp/state', '/api/rp/issue', '/api/rp/revoke', '/api/rp/revoke/challenge', '/api/rp/revoke/execute', '/api/rp/key/list', '/api/rp/events', '/api/rp/audit/observe', '/api/rp/audit/latest'],
+    api: ['/consent/requests', '/consent/pickup', '/api/rp/audit/ledger', '/api/rp/audit/bundle', '/api/rp/audit/export', '/api/rp/state', '/api/rp/issue', '/api/rp/revoke', '/api/rp/revoke/challenge', '/api/rp/revoke/execute', '/api/rp/key/list', '/api/rp/events', '/api/rp/audit/observe', '/api/rp/audit/latest'],
   }));
 
   return app;
@@ -286,7 +365,7 @@ export function startRpServer(port = RP_PORT, overrides: Partial<RpAppConfig> = 
     console.log(`  did:          ${config.identity.did}`);
     console.log(`  did.json:     http://localhost:${port}/.well-known/did.json`);
     console.log(`  status list:  ${config.statusListUrl}`);
-    console.log(`  revocation:   ${config.keyWebauthn && !config.bypassWebauthn ? (hasAuthenticator() ? 'authenticator touch REQUIRED' : 'KEY_WEBAUTHN=1 but no authenticator registered → software') : 'software-confirmed'}`);
+    console.log(`  revocation:   ${config.keyWebauthn && !config.bypassWebauthn ? (hasAuthenticator() ? 'authenticator touch REQUIRED' : 'BLOCKED: register an authenticator with KEY_SETUP=1') : 'software-confirmed'}`);
   });
   return { app, server, config };
 }

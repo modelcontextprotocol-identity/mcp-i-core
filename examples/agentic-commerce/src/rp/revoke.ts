@@ -24,6 +24,7 @@ export interface RevokeOutcome {
   version: number;
   publishedAt: string;
   totalMs: number;
+  audit?: 'recorded' | 'unavailable';
 }
 
 export async function revokeIndex(
@@ -57,6 +58,7 @@ export async function revokeIndex(
     new ConsentFlowStore().appendEvent({ type: 'delegation.revoked', actor: identity.did, payload: {
       credentialId: vc?.id ?? `status-list-index-${index}`, index, scope: scope?.resource ?? '',
       cap: scope?.constraints?.['maxAmount'] ?? '', currency: scope?.constraints?.['currency'] ?? '',
+      consentRef: (vc?.credentialSubject.delegation.metadata?.['consent'] as { consentRef?: string } | undefined)?.consentRef,
       statusListUrl: url, version: meta.version, at: meta.updatedAt,
     } });
   }

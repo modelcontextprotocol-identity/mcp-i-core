@@ -28,7 +28,7 @@ export const VAR_DIR = process.env['DEMO_VAR_DIR'] ?? path.join(EXAMPLE_ROOT, 'v
 export const DATA_DIR = process.env['DEMO_DATA_DIR'] ?? path.join(EXAMPLE_ROOT, '.data');
 export const WEB_DIR = path.join(EXAMPLE_ROOT, 'web');
 
-loadDotenv({ path: [path.join(EXAMPLE_ROOT, '.env.local'), path.join(EXAMPLE_ROOT, '.env')], quiet: true });
+loadDotenv({ path: process.env['DEMO_ENV_FILE'] ?? [path.join(EXAMPLE_ROOT, '.env.local'), path.join(EXAMPLE_ROOT, '.env')], quiet: true });
 
 // ---------------------------------------------------------------------------
 // Environment

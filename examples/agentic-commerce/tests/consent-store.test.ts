@@ -105,15 +105,13 @@ describe('persistent bound consent decisions', () => {
     ).toThrow();
     expect(s.pendingEvents().map((e) => e.type)).toEqual(['consent.denied']);
   });
-  it('expires both an undecided challenge and an approved resume token', async () => {
+  it('expires an undecided challenge while preserving delivery of an approved grant', async () => {
     let time = 1_000_000;
     const s = store(() => time);
     const c = s.create({ ...bindings, expiresAt: 1100 });
     await s.approve(c.resumeToken, form(c.resumeToken), issued);
     time = 1_100_000;
-    expect(() =>
-      s.consume(c.resumeToken, { agentDid: bindings.agentDid, audience: bindings.audience, credentialId: 'urn:grant:94', credentialDigest: s.get(c.resumeToken)?.credentialDigest ?? 'missing' }),
-    ).toThrow(/expired/);
+    expect(s.consume(c.resumeToken, { agentDid: bindings.agentDid, audience: bindings.audience, credentialId: 'urn:grant:94', credentialDigest: s.get(c.resumeToken)?.credentialDigest ?? 'missing' }).state).toBe('consumed');
     const d = s.create({ ...bindings, expiresAt: 1101 });
     time = 1_102_000;
     await expect(

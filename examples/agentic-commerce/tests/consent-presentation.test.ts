@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const scope = 'https://id.gs1.org/01/09506000134352';
 const fields = {
@@ -47,8 +47,15 @@ async function browser(options: boolean | BrowserOptions = false) {
     ) => listeners.set(name, listener),
   };
   const status = { textContent: '', dataset: {} };
-  const result = { hidden: true };
-  const resultTitle = { textContent: '' };
+  const resultIcon = { textContent: '' };
+  const result = { hidden: true, querySelector: () => resultIcon };
+  const resultTitle = { textContent: '', focus: vi.fn() };
+  const feedback = {};
+  const resultFeedback = { append: vi.fn() };
+  const closeWindow = vi.fn();
+  const navigate = vi.fn();
+  const timers: Array<() => void> = [];
+  const close = { hidden: true, addEventListener: (name: string, listener: () => Promise<void>) => listeners.set(`close-${name}`, listener) };
   const check = {
     hidden: true,
     disabled: false,
@@ -74,10 +81,17 @@ async function browser(options: boolean | BrowserOptions = false) {
     Uint8Array,
     atob,
     btoa,
+    window: { close: closeWindow, scrollTo: vi.fn(), location: { replace: navigate } },
+    setTimeout: (callback: () => void) => timers.push(callback),
     customElements: { whenDefined: async () => {} },
     document: {
       querySelector: (selector: string) =>
-        selector === '#consent-ui-data'
+        selector === '#return-to-demo' ? { href: 'http://localhost:4949/' }
+        : selector === '#close-consent-window' ? close
+        : selector === '#decision-feedback' ? feedback
+        : selector === '#result-feedback' ? resultFeedback
+        : selector === '#consent-ceremony' ? null
+        : selector === '#consent-ui-data'
           ? { textContent: JSON.stringify(bridge) }
           : selector === 'consent-capabilities-screen'
             ? screen
@@ -128,6 +142,8 @@ async function browser(options: boolean | BrowserOptions = false) {
     requests,
     result,
     resultTitle,
+    resultFeedback, feedback, close, closeWindow, navigate, timers,
+    closePopup: () => listeners.get('close-click')?.({}),
     check,
     assertions: () => assertions,
     deny: async () => listeners.get('capabilities-deny')?.({}),
@@ -164,6 +180,20 @@ describe('capability consent submission', () => {
       Object.fromEntries(page.requests[0]!.body as FormData),
     ).toMatchObject({ ...fields, selected_scopes: JSON.stringify([scope]) });
     expect(page.status.textContent).toContain('Grant issued');
+  });
+
+  it('moves decision feedback into the result card and closes the popup only on request', async () => {
+    const page = await browser();
+    await page.deny();
+    expect(page.resultFeedback.append).toHaveBeenCalledWith(page.feedback);
+    expect(page.resultTitle.focus).toHaveBeenCalledOnce();
+    expect(page.close.hidden).toBe(false);
+    expect(page.closeWindow).not.toHaveBeenCalled();
+    await page.closePopup();
+    expect(page.closeWindow).toHaveBeenCalledOnce();
+    expect(page.navigate).not.toHaveBeenCalled();
+    page.timers[0]!(); // A normal browser tab remained open after window.close().
+    expect(page.navigate).toHaveBeenCalledWith('http://localhost:4949/');
   });
 
   it('keeps the grant unissued on cancelled passkey confirmation and allows an explicit retry', async () => {

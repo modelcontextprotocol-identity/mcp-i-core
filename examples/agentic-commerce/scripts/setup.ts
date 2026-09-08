@@ -53,6 +53,7 @@ async function main() {
   const didDoc = ensureDidDocument(identity);
   await ensureStatusList({ identity, signingFunction: makeVcSigningFunction(identity.privateKeyBase64), url: STATUS_LIST_URL });
   clearActiveCredential();
+  (await import('../src/agent/store.js')).clearAgentState();
   const { ConsentFlowStore } = await import('../src/rp/consent-store.js');
   new ConsentFlowStore().invalidatePending();
   const index = nextDelegationIndex();

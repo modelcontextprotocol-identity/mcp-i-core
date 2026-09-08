@@ -33,7 +33,7 @@ Object.assign(process.env, {
   WEBAUTHN_RP_ID: 'localhost',
   CONSENT_WEBAUTHN: '1',
   KEY_SETUP: '1',
-  KEY_WEBAUTHN: '0',
+  KEY_WEBAUTHN: process.env['DEMO_PASSKEY_REVOCATION_TEST'] === '1' ? '1' : '0',
   DEMO_BYPASS_WEBAUTHN: '0',
   OFFLINE: '0',
   GOOGLE_CLIENT_ID: googleMode ? fixtureClientId : '',

@@ -38,9 +38,11 @@ import {
 import { writeJsonAtomic } from '../lib/atomic-json.js';
 import { parseDigitalLink } from '../lib/product.js';
 import type { DemoConsentLink } from './demo-consent.js';
+import type { ConsentEvidence } from '../lib/consent-evidence.js';
 
-export const ACTIVE_INDEX_FILE = path.join(VAR_DIR, 'active-index.json');
-export const delegationFile = (index: number): string => path.join(VAR_DIR, `delegation-${index}.json`);
+const ISSUED_DIR = path.join(VAR_DIR, 'rp', 'credentials');
+export const ACTIVE_INDEX_FILE = path.join(ISSUED_DIR, 'active-index.json');
+export const delegationFile = (index: number): string => path.join(ISSUED_DIR, `delegation-${index}.json`);
 
 export interface IssueOptions {
   index: number;
@@ -53,6 +55,7 @@ export interface IssueOptions {
   identity?: KeyedIdentity;
   statusListUrl?: string;
   demoConsent?: DemoConsentLink;
+  consent?: ConsentEvidence;
 }
 
 export async function issueDelegation(options: IssueOptions): Promise<DelegationCredential> {
@@ -111,13 +114,13 @@ export async function issueDelegation(options: IssueOptions): Promise<Delegation
           ],
         },
       },
-      metadata: { tool: 'place_order', event: 'w3c-gs1-ecommerce-workshop-2026', ...(options.demoConsent ? { demoConsent: options.demoConsent } : {}) },
+      metadata: { tool: 'place_order', event: 'w3c-gs1-ecommerce-workshop-2026', ...(options.demoConsent ? { demoConsent: options.demoConsent } : {}), ...(options.consent ? { consent: options.consent } : {}) },
     },
     { credentialStatus },
   );
 }
 
-/** Issue at an index, persist as the agent's active credential. */
+/** Issue at an index into the RP's own issuance archive. Delivery uses HTTP pickup. */
 export async function issueAndActivate(options: IssueOptions): Promise<{ file: string; vc: DelegationCredential }> {
   const vc = await issueDelegation(options);
   const file = delegationFile(options.index);
@@ -141,15 +144,17 @@ export function activeCredential(): DelegationCredential {
   return vc;
 }
 
-/** Reset the agent's active grant without deleting prior credentials or audit evidence. */
+/** Clear the RP's current grant pointer without deleting prior credentials or audit evidence. */
 export function clearActiveCredential(): void { fs.rmSync(ACTIVE_INDEX_FILE, { force: true }); }
 
 /** Never reuse a status-list index from an earlier grant, including revoked grants. */
 export function nextDelegationIndex(): number {
   const reserved = Number(env('STATUSLIST_INDEX', '94'));
-  const used = fs.existsSync(VAR_DIR) ? fs.readdirSync(VAR_DIR).flatMap(name => {
+  // Legacy archive filenames reserve indices too. Re-consent must not reuse
+  // an old status bit when upgrading from the previous shared-file example.
+  const used = [ISSUED_DIR, VAR_DIR].flatMap(dir => fs.existsSync(dir) ? fs.readdirSync(dir).flatMap(name => {
     const match = /^delegation-(\d+)\.json$/.exec(name); return match ? [Number(match[1])] : [];
-  }) : [];
+  }) : []);
   return Math.max(reserved, ...used.map(index => index + 1));
 }
 

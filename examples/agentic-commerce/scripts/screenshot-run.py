@@ -218,7 +218,7 @@ async def main():
 
             await act('a')
             await expect(page.locator('#audit-overlay')).to_have_class('audit-overlay on')
-            for event in ['consent.approved', 'consent.denied', 'delegation.issued', 'delegation.revoked']:
+            for event in ['consent.requested', 'credential.verified', 'authorization.approved', 'authorization.denied']:
                 await expect(page.locator('#audit-table')).to_contain_text(event)
             await shot('10-ledger', full=False)
             await act('t')

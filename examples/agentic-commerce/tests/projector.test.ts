@@ -23,7 +23,7 @@ class Element {
   title = '';
   style: Record<string, string> = {};
   children: Element[] = [];
-  onclick: (() => unknown) | null = null;
+  onclick: ((event?: Partial<MouseEvent>) => unknown) | null = null;
   classList = {
     add: (name: string) => { this.className += ` ${name}`; },
     remove: (name: string) => { this.className = this.className.split(' ').filter((n) => n !== name).join(' '); },
@@ -93,8 +93,11 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
     if (!element) throw new Error(`Missing projector element #${id}`);
     return element;
   };
+  const popup = { opener: {} as object | null, name: '', location: { replace: vi.fn() }, focus: vi.fn(), close: vi.fn() };
+  const open = vi.fn().mockReturnValue(popup);
   const context = vm.createContext({
-    URL, Date, console, setTimeout, clearTimeout,
+    URL, Date, console, setTimeout, clearTimeout, AbortSignal, AbortController,
+    window: { open, screen: { availWidth: 1440, availHeight: 900, availLeft: 0, availTop: 0 } },
     document: {
       getElementById: get, createElement: () => new Element(),
       body: new Element(), querySelectorAll: () => [], addEventListener: () => {},
@@ -115,7 +118,7 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
     if (!source?.onmessage) throw new Error(`Missing SSE stream ${stream}`);
     source.onmessage({ data: JSON.stringify(data) });
   };
-  return { get, emit, state };
+  return { get, emit, state, open, popup };
 }
 
 const attributePayload = `\" onpointerenter=\"globalThis.projectorInjected=1\" data-injected=\"'&<>`;
@@ -133,6 +136,36 @@ function auditFixture() {
     inclusions: [], allIncluded: true, chainIntact: true,
   };
 }
+
+describe('revocation terminal feedback', () => {
+  it('renders the HTTP result even when the completion SSE is lost', async () => {
+    const p = await projector();
+    p.state.responses['http://localhost:4950/api/rp/state'] = { grantIssued: true, activeIndex: 94, keyRequired: false, revoked: false, statusList: { version: 1 } };
+    p.state.responses['http://localhost:4950/api/rp/revoke'] = { index: 94, revoked: true, version: 2, totalMs: 5, audit: 'recorded' };
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
+    await p.get('btn-revoke').onclick!();
+    expect(p.get('seal').textContent).toBe('REVOKED');
+    expect(p.get('verdict-code').textContent).toBe('GRANT REVOKED');
+  });
+
+  it('leaves VERIFYING on failure and does not claim the grant was revoked', async () => {
+    const p = await projector();
+    p.state.responses['http://localhost:4950/api/rp/state'] = { grantIssued: true, activeIndex: 94, keyRequired: false, revoked: false, statusList: { version: 1 } };
+    p.state.responses['http://localhost:4950/api/rp/revoke'] = { error: 'revocation_failed', message: 'Storage unavailable' };
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
+    await p.get('btn-revoke').onclick!();
+    expect(p.get('seal').textContent).not.toBe('VERIFYING');
+    expect(p.get('verdict-code').textContent).toBe('REVOCATION NOT CONFIRMED');
+  });
+
+  it('distinguishes successful publication from an unavailable audit export', async () => {
+    const p = await projector();
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_done', index: 94, revoked: true, version: 2, audit: 'unavailable' });
+    expect(p.get('seal').textContent).toBe('REVOKED');
+    expect(p.get('verdict-code').textContent).toBe('GRANT REVOKED · AUDIT EXPORT PENDING');
+  });
+});
 
 describe('projector untrusted receipt and audit rendering', () => {
   it('keeps quote-bearing receipt fields literal through the actual merchant SSE handler', async () => {
@@ -273,12 +306,44 @@ describe('projector human-grant journey', () => {
     expect(p.get('verdict-code').textContent).toBe('CONSENT_BINDING_MISMATCH');
   });
 
+  it('opens human consent in a centered popup and detaches its opener before navigating', async () => {
+    const p = await projector(challenge.body);
+    const preventDefault = vi.fn();
+    p.popup.location.replace.mockImplementation(() => { expect(p.popup.opener).toBeNull(); });
+    expect(p.get('authorization-link').onclick).toBeTypeOf('function');
+    await p.get('authorization-link').onclick!({ button: 0, preventDefault });
+    expect(p.open).toHaveBeenCalledWith('about:blank', '_blank', expect.stringContaining('popup=yes,width=680,height=820'));
+    expect(p.popup.location.replace).toHaveBeenCalledWith(challenge.body.authorizationUrl);
+    expect(p.popup.focus).toHaveBeenCalled();
+    expect(preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the ordinary consent link usable if popups are blocked or a modified click requests a tab', async () => {
+    const p = await projector(challenge.body);
+    const preventDefault = vi.fn();
+    expect(p.get('authorization-link').onclick).toBeTypeOf('function');
+    await p.get('authorization-link').onclick!({ button: 0, ctrlKey: true, preventDefault });
+    expect(p.open).not.toHaveBeenCalled();
+    p.open.mockReturnValue(null);
+    await p.get('authorization-link').onclick!({ button: 0, preventDefault });
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(p.get('authorization-link').href).toBe(challenge.body.authorizationUrl);
+  });
+
+  it('restores a cached verified consent challenge from the agent reply when no new merchant SSE event occurs', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/order'] = { result: { content: [{ type: 'text', text: JSON.stringify(challenge.body) }] } };
+    await p.get('btn-order').onclick!();
+    expect(p.get('authorization-link').href).toBe(challenge.body.authorizationUrl);
+    expect(p.get('authorization-panel').hidden).toBe(false);
+  });
+
   it('shows the Google account, passkey, signed consent and agent relationship from grant metadata', async () => {
     const p = await projector(undefined, namedGrant());
     expect(p.get('human-grant').hidden).toBe(false);
     expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
     expect(p.get('c-human-source').textContent).toContain('Google account');
-    expect(p.get('c-human-authentication').textContent).toContain('Passkey confirmed');
+    expect(p.get('c-human-authentication').textContent).toContain('RP verified the passkey');
     expect(p.get('c-human-consent').textContent).toContain('consent-reference');
     expect(p.get('c-agent').textContent).toBe('did:key:shopping-agent');
     expect(p.get('verdict-code').textContent).toBe('GRANT ACTIVE · READY TO ORDER');

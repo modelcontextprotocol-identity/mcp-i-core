@@ -29,15 +29,22 @@ function updateControls() {
   checkStatus.disabled = busy;
 }
 
-function finishDecision(decision, human, passkeyConfirmed = false) {
+function showResult(title, icon) {
   completed = true;
   requiresReconciliation = false;
   consent.hidden = true;
-  const ceremony = document.querySelector('#consent-ceremony');
-  if (ceremony) ceremony.hidden = true;
-  document.querySelector('#consent-result').hidden = false;
-  document.querySelector('#result-title').textContent =
-    decision === 'approve' ? 'Grant issued' : 'Grant denied';
+  const result = document.querySelector('#consent-result');
+  result.hidden = false;
+  result.querySelector('.result-icon').textContent = icon;
+  document.querySelector('#result-title').textContent = title;
+  document.querySelector('#result-feedback').append(document.querySelector('#decision-feedback'));
+  document.querySelector('#close-consent-window').hidden = false;
+  document.querySelector('#result-title').focus();
+  window.scrollTo(0, 0);
+}
+
+function finishDecision(decision, human, passkeyConfirmed = false) {
+  showResult(decision === 'approve' ? 'Grant issued' : 'Grant denied', decision === 'approve' ? '✓' : '×');
   status.dataset.state = 'success';
   status.textContent =
     decision === 'deny'
@@ -73,9 +80,7 @@ async function reconcileDecision() {
     } else if (result.state === 'denied') {
       finishDecision('deny');
     } else if (['failed', 'expired'].includes(result.state)) {
-      completed = true;
-      requiresReconciliation = false;
-      consent.hidden = true;
+      showResult('Request unavailable', '!');
       status.dataset.state = 'error';
       status.textContent =
         'This request cannot be completed. Request fresh authorization from the agent.';
@@ -94,9 +99,6 @@ async function reconcileDecision() {
 }
 
 async function confirmGrant(decisionFields) {
-  status.textContent = bridge.human
-    ? 'Confirm with the passkey linked to this Google account to approve this exact grant.'
-    : 'Touch your authenticator to approve this exact grant.';
   const response = await fetch('/consent/webauthn/challenge', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -154,6 +156,7 @@ async function decide(decision, selectedScopes) {
   busy = true;
   updateControls();
   status.dataset.state = 'pending';
+  status.textContent = '';
   let submitted = false;
   try {
     const decisionFields = {
@@ -237,3 +240,9 @@ consent.addEventListener('capabilities-allow', async (event) => {
   await decide('approve', [...selected]);
 });
 consent.addEventListener('capabilities-deny', () => decide('deny'));
+
+document.querySelector('#close-consent-window').addEventListener('click', () => {
+  window.close();
+  // A normal tab may disallow script closing. Return it to the console instead.
+  setTimeout(() => window.location.replace(document.querySelector('#return-to-demo').href), 150);
+});

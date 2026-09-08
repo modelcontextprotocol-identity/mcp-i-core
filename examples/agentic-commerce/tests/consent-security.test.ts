@@ -167,7 +167,7 @@ describe('consent cannot be bypassed by cached authority or a valid credential a
       const args: Record<string, unknown> = { product: 'risotto', quantity: 2 };
       args['_kyaos_proof'] = await requestProof(args);
       const { body, checks } = await rawOrder(args);
-      expect(body.error).toBe('CONSENT_UNAVAILABLE');
+      expect(body.error).toBe('CONSENT_PROTOCOL_UNAVAILABLE');
       expect(body.authorizationUrl).toBeUndefined();
       expect(checks).toMatchObject({ signature: 'skip', revocation: 'skip', holder: 'pass', consent: 'fail' });
     } finally { fs.writeFileSync(file, saved); }
@@ -178,7 +178,7 @@ describe('consent cannot be bypassed by cached authority or a valid credential a
     const { result, body, checks } = await order({ credential: vc });
     expect(result.isError).toBe(true);
     expect(body.error).toBe('CONSENT_REQUIRED');
-    expect(body.reason).toMatch(/missing human consent/i);
+    expect(body.reason).toMatch(/missing signed human consent/i);
     expect(checks).toMatchObject({ signature: 'pass', revocation: 'pass', holder: 'pass', consent: 'fail', product: 'skip', cap: 'skip' });
   });
 
@@ -186,38 +186,43 @@ describe('consent cannot be bypassed by cached authority or a valid credential a
     expect((await order({ credential: null })).body.error).toBe('needs_authorization');
   });
 
-  it('keeps first use available when scope or cap rejects an order', async () => {
-    await store.approve(originalToken, fields(originalToken), () => issue.issueAndActivate({ index: 94, agentDid, audience: merchantDid }));
+  it('keeps the delivered grant usable when scope or cap rejects an order', async () => {
+    const approval = await fetch(`http://127.0.0.1:${rpPort}/consent/approve`, { method: 'POST', body: new URLSearchParams(fields(originalToken)) });
+    expect(approval.ok, await approval.text()).toBe(true);
     for (const [product, quantity, code] of [['olive-oil', 1, 'PRODUCT_OUT_OF_SCOPE'], ['risotto', 5, 'SPEND_CAP_EXCEEDED']] as const) {
-      const { result, body } = await order({ product, quantity, resumeToken: originalToken });
+      const { result, body } = await order({ product, quantity });
       expect(result.isError).toBe(true);
       expect(body.error).toBe(code);
-      expect(store.get(originalToken)?.state).toBe('approved');
+      expect(store.get(originalToken)?.state).toBe('consumed'); // RP delivery is separate from order acceptance.
     }
   });
 
-  it('refuses another approved grant token at the consent gate while preserving successful credential verification', async () => {
-    const source = store.get(originalToken)!;
-    const other = store.create(source.bindings);
-    await store.approve(other.resumeToken, fields(other.resumeToken), async () => ({
-      vc: await issue.issueDelegation({ index: 96, agentDid, audience: merchantDid }), file: path.join(tmp, 'other-delegation.json'),
-    }));
-    const { result, body, checks } = await order({ resumeToken: other.resumeToken });
-    expect(result.isError).toBe(true);
-    expect(body.error).toBe('CONSENT_BINDING_MISMATCH');
-    expect(checks).toMatchObject({ signature: 'pass', revocation: 'pass', holder: 'pass', product: 'pass', cap: 'pass', consent: 'fail', receipt: 'skip' });
-    expect(store.get(originalToken)?.state).toBe('approved');
-    expect(store.get(other.resumeToken)?.state).toBe('approved');
-  });
-
-  it('allows a changed quantity within the approved grant and rejects token replay with a fresh holder signature', async () => {
+  it('allows fresh in-scope orders even when an older caller repeatedly sends its obsolete first-use token', async () => {
     expect((await order({ quantity: 1 })).body.orderId).toMatch(/^ORD-/);
     expect(store.get(originalToken)?.state).toBe('consumed');
-    const replay = await order({ resumeToken: originalToken });
+    const credential = (await import('../src/agent/store.js')).readAgentState().credential;
+    for (const token of [originalToken, originalToken, 'unrelated-legacy-token']) {
+      const args: Record<string, unknown> = { product: 'risotto', quantity: 2, _kyaos_delegation: credential, resumeToken: token };
+      args['_kyaos_proof'] = await requestProof(args);
+      const accepted = await rawOrder(args);
+      expect(accepted.result.isError, JSON.stringify(accepted.body)).toBeFalsy();
+      expect(accepted.body.orderId).toMatch(/^ORD-/);
+      expect(accepted.checks).toMatchObject({ signature: 'pass', revocation: 'pass', holder: 'pass', consent: 'pass' });
+    }
+    expect(fs.existsSync(path.join(tmp, 'var', 'merchant', 'consent-use.json'))).toBe(false);
+  });
+
+  it('still rejects an exact request-proof replay before placing a second order', async () => {
+    const credential = (await import('../src/agent/store.js')).readAgentState().credential;
+    const args: Record<string, unknown> = { product: 'risotto', quantity: 1, _kyaos_delegation: credential };
+    args['_kyaos_proof'] = await requestProof(args);
+    expect((await rawOrder(args)).body.orderId).toMatch(/^ORD-/);
+    const before = await (await fetch(`http://127.0.0.1:${merchantPort}/api/state`)).json();
+    const replay = await rawOrder(args);
     expect(replay.result.isError).toBe(true);
-    expect(replay.body.reason).toMatch(/consumed/i);
-    expect(replay.body.error).toBe('CONSENT_CONSUMED');
-    expect(replay.checks).toMatchObject({ signature: 'pass', revocation: 'pass', holder: 'pass', consent: 'fail' });
+    expect(replay.body.error).toBe('holder_binding_failed');
+    expect(replay.checks).toMatchObject({ signature: 'pass', revocation: 'pass', holder: 'fail', consent: 'skip' });
+    expect((await (await fetch(`http://127.0.0.1:${merchantPort}/api/state`)).json()).orders).toBe(before.orders);
     expect((await order()).body.orderId).toMatch(/^ORD-/);
   });
 
@@ -229,32 +234,30 @@ describe('consent cannot be bypassed by cached authority or a valid credential a
     const identity = signer === 'rp' ? loadRpIdentity() : { did, kid: `${did}#${did.slice(8)}`, privateKeyBase64: keys.privateKey, publicKeyBase64: keys.publicKey };
     const counterfeit = await issue.issueDelegation({ index: 95, agentDid, audience: merchantDid, identity, cap: '999.00', productClass: 'https://id.gs1.org/01/09506000134369' });
     counterfeit.id = legitimate.id;
+    counterfeit.credentialSubject.delegation.metadata = legitimate.credentialSubject.delegation.metadata;
     const { canonicalizeJSON } = await import('@kya-os/mcp');
     const { proof: ignored, ...unsigned } = counterfeit;
     counterfeit.proof = await makeVcSigningFunction(identity.privateKeyBase64)(canonicalizeJSON(unsigned), identity.did, identity.kid);
     const { result, body } = await order({ product: 'olive-oil', quantity: 1, credential: counterfeit });
     expect(result.isError).toBe(true);
-    expect(body.reason).toMatch(/exact credential/i);
+    expect(body.error).toBe('CONSENT_BINDING_MISMATCH');
+    expect(body.reason).toMatch(/signed consent attestation/i);
   });
 
   it('starts a fresh consent challenge when the active credential is removed after success', async () => {
-    issue.clearActiveCredential();
+    const { clearAgentState } = await import('../src/agent/store.js');
+    clearAgentState();
     expect((await order()).body.error).toBe('needs_authorization');
   });
 
-  it('fails closed on an unknown resume token even with no credential', async () => {
-    const { result, body } = await order({ credential: null, resumeToken: 'unknown-token-that-is-not-issued-to-anyone' });
-    expect(result.isError).toBe(true);
-    expect(body.error).toBe('CONSENT_MISSING');
-  });
-
-  it('fails closed on an expired resume token even with no credential', async () => {
-    const { ConsentFlowStore } = await import('../src/rp/consent-store.js');
-    const oldClock = new ConsentFlowStore({ now: () => Date.now() - 3600_000 });
-    const expired = oldClock.create({ agentDid, audience: merchantDid, product: 'risotto', quantity: 2, productClass: scope, cap: '50.00', currency: 'CHF', validHours: 48, expiresAt: Math.floor(Date.now() / 1000) - 1 });
-    const { result, body } = await order({ credential: null, resumeToken: expired.resumeToken });
-    expect(result.isError).toBe(true);
-    expect(body.error).toBe('CONSENT_EXPIRED');
-    expect(body.reason).toMatch(/expir/i);
+  it.each(['approved', 'unknown'] as const)('never treats an %s resume token as authority without a credential', async (kind) => {
+    const before = await (await fetch(`http://127.0.0.1:${merchantPort}/api/state`)).json();
+    const args: Record<string, unknown> = { product: 'risotto', quantity: 1,
+      resumeToken: kind === 'approved' ? originalToken : 'unknown-token-that-is-not-issued-to-anyone' };
+    args['_kyaos_proof'] = await requestProof(args);
+    const { body, checks } = await rawOrder(args);
+    expect(body.error).toBe('needs_authorization');
+    expect(checks).toMatchObject({ holder: 'pass', consent: 'pending', receipt: 'skip' });
+    expect((await (await fetch(`http://127.0.0.1:${merchantPort}/api/state`)).json()).orders).toBe(before.orders);
   });
 });

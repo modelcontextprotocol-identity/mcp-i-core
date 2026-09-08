@@ -349,6 +349,7 @@
           revocation truth → <a id="list-url" href="#" target="_blank" rel="noopener">StatusList2021, hosted by the Responsible Party</a>
           <span id="list-meta"></span>
         </div>
+        <div class="muted" style="margin-top:4px;"><a id="rp-ledger-link" target="_blank" rel="noopener">RP consent ledger</a> · <a id="rp-bundle-link" target="_blank" rel="noopener">Download RP signed bundle</a></div>
         <div class="muted" id="rp-resolved" style="margin-top:4px;"></div>
       </div>
     </section>
@@ -388,7 +389,7 @@
       <div class="authorization" id="authorization-panel" hidden aria-live="polite">
         <h2>The human decides what the agent may do.</h2>
         <p id="authorization-detail"></p>
-        <a id="authorization-link" target="_blank" rel="noopener noreferrer">Open human consent</a>
+        <a id="authorization-link" aria-label="Open human consent in a popup window" target="_blank" rel="noopener noreferrer">Open human consent</a>
         <span class="url" id="authorization-url"></span>
       </div>
       <div class="controls-head">Live MCP client · same tools as Claude Desktop</div>
@@ -431,8 +432,8 @@
 <div class="key-overlay" id="key-overlay">
   <div class="key-card">
     <div class="key-ring"><span class="key-glyph">⏻</span></div>
-    <h2>Touch your authenticator to authorize</h2>
-    <div class="sub">Killing this agent's authority requires <b>a human, physically present</b></div>
+    <h2>Confirm revocation with your passkey</h2>
+    <div class="sub">Use your registered passkey or security key to withdraw this grant.</div>
     <div class="sub">FIDO2 · the WebAuthn challenge is the hash of this exact revocation</div>
     <div class="intent" id="key-intent"></div>
     <button class="key-cancel" id="key-cancel">Cancel — leave the grant active</button>
@@ -544,9 +545,10 @@
   function setBusy(b) {
     busy = b;
     document.querySelectorAll('button.act').forEach((x) => { x.disabled = b; });
+    $('btn-revoke').disabled = b || !rpCache.grantIssued;
   }
-  async function api(path, opts, base = '') {
-    const res = await fetch(base + path, { method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: opts ? JSON.stringify(opts) : undefined });
+  async function api(path, opts, base = '', signal) {
+    const res = await fetch(base + path, { method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: opts ? JSON.stringify(opts) : undefined, signal });
     return res.json();
   }
 
@@ -583,6 +585,30 @@
     }
   }
 
+  $('authorization-link').onclick = (event) => {
+    // Preserve native tab behavior for modified clicks and popup blocking.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const challenge = pendingAuthorization;
+    if (!challenge || challenge.expiresAt <= Date.now() / 1000) {
+      event.preventDefault();
+      if (challenge) showAuthorization(challenge);
+      return;
+    }
+    const available = window.screen;
+    const width = Math.min(680, available.availWidth - 32);
+    const height = Math.min(900, available.availHeight - 80);
+    const left = Math.round((available.availLeft || 0) + (available.availWidth - width) / 2);
+    const top = Math.round((available.availTop || 0) + (available.availHeight - height) / 2);
+    const popup = window.open('about:blank', '_blank', `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+    if (!popup) return;
+    // Detach synchronously while the new window is still same-origin and blank.
+    // No RP or identity-provider page gets a reference to the merchant window.
+    popup.opener = null;
+    popup.location.replace(challenge.authorizationUrl);
+    popup.focus();
+    event.preventDefault();
+  };
+
   function renderNoGrant() {
     clearHumanGrant();
     for (const id of ['c-rp', 'c-agent', 'c-aud', 'c-scope', 'c-cap', 'c-until', 'c-index']) $(id).textContent = '—';
@@ -613,10 +639,10 @@
     // All profile values are text, including provider-supplied display names.
     // The signed credential supplies this relationship; labels are never identity.
     $('c-human').textContent = human.displayName || 'Signed-in Google account';
-    $('c-human-source').textContent = 'Google account · provider-supplied profile name';
+    $('c-human-source').textContent = 'RP attests: Google account · provider-supplied name';
     $('c-human-authentication').textContent = authentication.userVerified
-      ? 'Passkey confirmed · user verification passed'
-      : 'Passkey confirmed';
+      ? 'RP verified the passkey · user verification passed'
+      : 'RP verified the passkey';
     $('c-human-consent').textContent = `Signed consent ${short(consent.consentRef, 38)}`;
     $('human-grant').hidden = false;
   }
@@ -687,6 +713,9 @@
     try {
       const r = await api('/api/rp/state', undefined, rpOrigin);
       rpCache = r;
+      $('btn-revoke').disabled = busy || !r.grantIssued;
+      $('rp-ledger-link').href = rpOrigin + '/api/rp/audit/ledger';
+      $('rp-bundle-link').href = rpOrigin + '/api/rp/audit/bundle';
       const g = await api('/api/rp/delegation', undefined, rpOrigin);
       renderGrant(g && g.credential, r.revoked, r.statusList);
       if (g.credential && $('verdict-code').textContent === 'NO GRANT · HUMAN CONSENT REQUIRED') {
@@ -698,14 +727,14 @@
         const status = await api('/consent/status?resume_token=' + encodeURIComponent(challenge.resumeToken), undefined, rpOrigin);
         if (status.state === 'pending') showAuthorization(challenge);
       }
-      $('rp-pill').textContent = `list v${r.statusList.version} · index #${r.activeIndex}`;
+      $('rp-pill').textContent = `list v${r.statusList.version} · ${r.grantIssued ? "index #" + r.activeIndex : "no active grant"}`;
       $('rp-pill').className = 'pill';
       const kn = $('kill-note');
       const labels = (r.authenticators || []).map((a) => a.label).join(', ');
       if (r.keyRequired) {
-        $('rp-ceremony').textContent = `authenticator touch required (${labels})`;
+        $('rp-ceremony').textContent = `passkey confirmation required (${labels || "register a key first"})`;
         kn.className = 'kill-note armed';
-        kn.innerHTML = `⏻ <b>Hardware-gated</b> — revoking requires a physical touch (FIDO2) bound to this revocation. Registered: ${esc(labels)}.`;
+        kn.innerHTML = `⏻ <b>Passkey required</b> · confirmation is bound to this grant’s revocation. Registered: ${esc(labels || "none; register a key first")}.`;
       } else if ((r.authenticators || []).length) {
         $('rp-ceremony').textContent = `software-confirmed (${labels} registered, bypassed)`;
         kn.className = 'kill-note';
@@ -854,8 +883,10 @@
       } else if (e.type === 'revoke_done') {
         line(`⚡ status list v${esc(e.version)} published · bit ${esc(e.index)} = 1 · ${esc(e.totalMs)} ms`, 'kill-line', true, rpLog);
         line(`⚡ Responsible Party published status list v${esc(e.version)} with bit ${esc(e.index)} set (${esc(e.totalMs)} ms). Every verifier that fetches the list now reads the revocation.`, 'kill-line', true);
-        setSeal('kill'); setCode('GRANT REVOKED', 'red');
+        renderRevocationOutcome(e);
         refresh();
+      } else if (e.type === 'revoke_failed') {
+        reconcileRevocationFailure(e.index, e.message);
       } else if (e.type === 'issued') {
         line(`issued grant #${esc(e.index)} to ${esc(short(e.subject, 30))} · scope ${esc(e.scope)}`, 'ok-line', false, rpLog);
       } else if (e.type === 'restored') {
@@ -1011,7 +1042,17 @@
   // ── triggers (simulated agent). SSE renders the outcome. ──────────────────────
   async function trigger(path, opts) {
     if (busy) return; setBusy(true);
-    try { const r = await api(path, opts ?? {}); if (r && r.error && !r.result) line(`${esc(path)}: ${esc(r.error)}`, 'kill-line'); }
+    try {
+      const r = await api(path, opts ?? {});
+      if (r && r.error && !r.result) line(`${esc(path)}: ${esc(r.error)}`, 'kill-line');
+      // Pending consent can come from the agent's previously verified challenge
+      // after a reconnect, without producing another merchant SSE event.
+      const text = r && r.result && r.result.content && r.result.content[0] && r.result.content[0].text;
+      if (text) {
+        const body = JSON.parse(text);
+        if (body.error === 'needs_authorization' && (!pendingAuthorization || pendingAuthorization.resumeToken !== body.resumeToken)) showAuthorization(body);
+      }
+    }
     catch (err) { line(`${esc(path)} failed: ${esc(err.message)}`, 'kill-line'); }
     setBusy(false);
   }
@@ -1030,31 +1071,84 @@
   const bufToB64u = (buf) => { const b = new Uint8Array(buf); let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, ''); };
   const showKey = (p) => { $('key-intent').innerHTML = `approving revocation of grant <code>#${esc(p && p.index)}</code> on <code>${esc(short(p && p.statusListUrl, 40))}</code> · challenge <code>${esc(p && p.challengeHead)}…</code>`; $('key-overlay').classList.add('on'); };
   const hideKey = () => $('key-overlay').classList.remove('on');
-  $('key-cancel').onclick = () => { hideKey(); line('approval cancelled — grant still ACTIVE', 'warn-line'); setBusy(false); };
+  let revocationPrompt = null;
+  $('key-cancel').onclick = () => revocationPrompt?.abort();
 
+  function renderRevocationOutcome(result) {
+    setSeal('kill');
+    setCode(result.audit === 'unavailable' ? 'GRANT REVOKED · AUDIT EXPORT PENDING' : 'GRANT REVOKED', 'red');
+    if (result.audit === 'unavailable') line('Revocation is published. RP audit export needs a retry.', 'warn-line');
+  }
+  async function reconcileRevocationFailure(index, message) {
+    // A lost response does not tell us whether publication happened. Read back
+    // the same grant before claiming success, and never retry a mutation here.
+    try {
+      const current = await api('/api/rp/state', undefined, rpOrigin, AbortSignal.timeout(10_000));
+      if (index != null && current.activeIndex === index && current.revoked === true) {
+        setSeal('kill'); setCode('GRANT REVOKED · AUDIT STATUS UNKNOWN', 'red');
+        line('Status readback confirms revocation. The completion response was unavailable.', 'warn-line');
+        return;
+      }
+    } catch { /* Outcome remains unknown; do not leave VERIFYING on screen. */ }
+    setSeal('blocked', message || 'Check the grant status before retrying.');
+    setCode('REVOCATION NOT CONFIRMED', 'amber');
+    line('Revocation not confirmed: ' + esc(message || 'response unavailable'), 'warn-line');
+  }
+  const revokeRequest = (path, body) => api(path, body, rpOrigin, AbortSignal.timeout(15_000));
   async function revokeAction() {
     if (busy || !rpOrigin) return;
-    if (!rpCache.keyRequired) { setBusy(true); try { const r = await api('/api/rp/revoke', {}, rpOrigin); if (r.error) line(`revoke: ${esc(r.message || r.error)}`, 'warn-line'); } catch (e) { line(`revoke failed: ${esc(e.message)}`, 'kill-line'); } setBusy(false); return; }
     setBusy(true);
+    let index = null;
     try {
-      const ch = await api('/api/rp/revoke/challenge', {}, rpOrigin);
-      if (ch.error) { line('revoke: ' + esc(ch.error), 'warn-line'); setBusy(false); return; }
-      showKey(ch.intentPreview);
-      const o = ch.options;
-      const publicKey = { challenge: b64uToBuf(o.challenge), timeout: o.timeout, rpId: o.rpId, userVerification: o.userVerification,
-        allowCredentials: (o.allowCredentials || []).map((cr) => ({ id: b64uToBuf(cr.id), type: 'public-key', ...(cr.transports ? { transports: cr.transports } : {}) })) };
-      let cred;
-      try { cred = await navigator.credentials.get({ publicKey }); }
-      catch { hideKey(); line('approval cancelled / timed out — grant still ACTIVE', 'warn-line'); setBusy(false); return; }
-      const r = cred.response;
-      const assertion = { id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
-        response: { clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData), signature: bufToB64u(r.signature), ...(r.userHandle ? { userHandle: bufToB64u(r.userHandle) } : {}) } };
-      const exec = await api('/api/rp/revoke/execute', { nonce: ch.nonce, response: assertion }, rpOrigin);
-      hideKey();
-      if (exec.error) line('revocation refused (authenticator): ' + esc(exec.error), 'kill-line', true);
-      else line(`assertion verified ✓ · ${esc(exec.authenticator)} (…${esc(exec.idTail)}) · record ${esc((exec.recordFile || '').split('/').pop() || '')}`, 'kill-line');
-    } catch (e) { hideKey(); line('revoke error: ' + esc(e.message), 'kill-line'); }
-    setBusy(false);
+      // Fetch the current grant and configuration, including changes after restart.
+      rpCache = await revokeRequest('/api/rp/state');
+      if (!rpCache.grantIssued) {
+        setSeal('consent'); setCode('NO GRANT · HUMAN CONSENT REQUIRED', 'amber');
+        return;
+      }
+      index = rpCache.activeIndex;
+      let result;
+      if (!rpCache.keyRequired) {
+        result = await revokeRequest('/api/rp/revoke', { index });
+      } else {
+        const ch = await revokeRequest('/api/rp/revoke/challenge', {});
+        if (ch.error) throw new Error(ch.message || ch.error);
+        index = ch.intentPreview.index;
+        showKey(ch.intentPreview);
+        $('key-cancel').disabled = false;
+        const o = ch.options;
+        const publicKey = { challenge: b64uToBuf(o.challenge), timeout: o.timeout, rpId: o.rpId, userVerification: o.userVerification,
+          allowCredentials: (o.allowCredentials || []).map((cr) => ({ id: b64uToBuf(cr.id), type: 'public-key', ...(cr.transports ? { transports: cr.transports } : {}) })) };
+        const controller = new AbortController();
+        revocationPrompt = controller;
+        let cred;
+        try {
+          cred = await navigator.credentials.get({ publicKey, signal: controller.signal });
+          if (controller.signal.aborted || !cred) throw new Error('Approval cancelled');
+        } catch {
+          setSeal('ready', 'Passkey confirmation cancelled. No revocation was sent.');
+          setCode('REVOCATION CANCELLED', 'amber');
+          line('Passkey confirmation cancelled or timed out. No revocation was sent.', 'warn-line');
+          return;
+        } finally { revocationPrompt = null; }
+        // Once signed and submitted, cancelling cannot promise to undo the effect.
+        $('key-cancel').disabled = true;
+        hideKey();
+        const r = cred.response;
+        const assertion = { id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+          response: { clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData), signature: bufToB64u(r.signature), ...(r.userHandle ? { userHandle: bufToB64u(r.userHandle) } : {}) } };
+        result = await revokeRequest('/api/rp/revoke/execute', { nonce: ch.nonce, response: assertion });
+        if (!result.error) line(`passkey assertion verified · ${esc(result.authenticator)} (…${esc(result.idTail)})`, 'kill-line');
+      }
+      if (result.error) throw new Error(result.message || result.error);
+      if (result.revoked !== true || result.index !== index) throw new Error('Unexpected revocation response');
+      renderRevocationOutcome(result);
+      refresh();
+    } catch (e) {
+      await reconcileRevocationFailure(index, e.message);
+    } finally {
+      hideKey(); setBusy(false);
+    }
   }
 
   $('btn-discover').onclick = () => trigger('/api/act/discover', {});

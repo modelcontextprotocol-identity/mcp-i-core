@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createConsentAuditBridge, consentDigest } from '../src/merchant/consent-audit.js';
+import { createConsentAuditBridge } from '../src/rp/consent-audit.js';
+import { consentDigest } from '../src/lib/consent-evidence.js';
 import type { MerchantAudit } from '../src/merchant/audit.js';
 import type { ConsentFlowStore } from '../src/rp/consent-store.js';
 
@@ -12,12 +13,21 @@ function setup(events = [event]) {
   return { bridge: createConsentAuditBridge({ record } as unknown as MerchantAudit, store, 'did:web:rp.example'), record, acknowledgeEvents };
 }
 
-describe('consent joins the required merchant audit trail', () => {
+describe('the RP records its own consent audit trail', () => {
+  it('replays a legacy revocation without inventing an unavailable scope or cap', async () => {
+    const { bridge, record } = setup([{ ...event, type: 'delegation.revoked', payload: { ...event.payload, scope: '', cap: '', currency: '' } }]);
+    await bridge.flush();
+    const input = record.mock.calls[0]![0];
+    expect(input.authorization.scopeId).toBeUndefined();
+    expect(input.action.name).toBe('revoke status-list index=94');
+    expect(input.resource.value).toBe(consentDigest({ ...event.payload, scope: '', cap: '', currency: '' }));
+  });
+
   it('records each RP event once when multiple requests flush concurrently', async () => {
     const { bridge, record, acknowledgeEvents } = setup();
     await Promise.all([bridge.flush(), bridge.flush(), bridge.flush()]);
     expect(record).toHaveBeenCalledTimes(1);
-    expect(acknowledgeEvents).toHaveBeenCalledTimes(1);
+    expect(acknowledgeEvents).not.toHaveBeenCalled();
     expect(record.mock.calls[0]![0]).toMatchObject({ eventType: 'delegation.issued', details: { family: 'delegation', phase: 'issued', delegationRef: 'grant-94' }, authorization: { scopeId: event.payload.scope }, action: { name: 'place_order; index=94; MaxAmount=CHF 50.00' } });
   });
   it('identifies the public RP correctly and commits authentication within the human consent event', async () => {
@@ -50,6 +60,6 @@ describe('consent joins the required merchant audit trail', () => {
     expect(acknowledgeEvents).not.toHaveBeenCalled();
     await bridge.flush();
     expect(record).toHaveBeenCalledTimes(2);
-    expect(acknowledgeEvents).toHaveBeenCalledOnce();
+    expect(acknowledgeEvents).not.toHaveBeenCalled();
   });
 });

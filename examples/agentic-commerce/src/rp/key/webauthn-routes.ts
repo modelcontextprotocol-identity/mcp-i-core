@@ -43,7 +43,7 @@ export interface KeyRoutesConfig {
   setupEnabled: boolean;
   identityAuth?: HumanIdentityAuth;
   statusListUrl: () => string;
-  currentIndex: () => number;
+  currentIndex: () => number | null;
   performRevoke: (index: number) => Promise<RevokeOutcome>;
 }
 
@@ -255,6 +255,9 @@ export function createKeyRoutes(config: KeyRoutesConfig) {
   // ---- revocation, phase 1: challenge -------------------------------------
 
   app.post('/api/rp/revoke/challenge', async (c) => {
+    const index = config.currentIndex();
+    if (index === null)
+      return c.json({ error: 'no_active_grant', message: 'There is no active grant to revoke. Approve a grant first.' }, 409);
     const registered = listAuthenticators();
     if (registered.length === 0)
       return c.json(
@@ -264,7 +267,6 @@ export function createKeyRoutes(config: KeyRoutesConfig) {
         },
         400,
       );
-    const index = config.currentIndex();
     const nonce = randomBytes(16).toString('base64url');
     const built = buildRevocationIntent({
       statusListUrl: config.statusListUrl(),

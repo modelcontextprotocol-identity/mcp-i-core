@@ -90,6 +90,17 @@ async function consent(challenge: Challenge, decision: 'approve' | 'deny') {
 }
 
 describe('the stage, beat by beat', () => {
+  it('refuses revocation without an active grant instead of silently revoking reserved index 94', async () => {
+    const before = await (await fetch(`http://localhost:${RP_PORT}/api/rp/state`)).json();
+    const response = await fetch(`http://localhost:${RP_PORT}/api/rp/revoke`, { method: 'POST', body: '{}' });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'no_active_grant' });
+    const after = await (await fetch(`http://localhost:${RP_PORT}/api/rp/state`)).json();
+    expect(after.statusList.version).toBe(before.statusList.version);
+    expect(after.activeIndex).toBeNull();
+  });
+
+
   it('0 · discovery: the agent reads acceptedTrustSchemes and decides to present', async () => {
     const d = await agent.discover(`http://localhost:${MERCHANT_PORT}`);
     expect(d.accepted).toBe(true);
@@ -218,15 +229,15 @@ describe('the stage, beat by beat', () => {
     expect(r.tree.length).toBe(2 * r.entries.length - 1);
     expect(r.entries[0]?.eventType).toBe('ledger.epoch.started');
     const types = r.entries.map((e) => e.eventType);
-    expect(types).toEqual(expect.arrayContaining(['consent.requested', 'consent.denied', 'consent.approved', 'delegation.issued', 'delegation.revoked']));
-    const approved = types.indexOf('consent.approved');
-    const issued = types.indexOf('delegation.issued');
-    const allowed = types.indexOf('authorization.approved');
-    const revoked = types.indexOf('delegation.revoked');
-    expect(approved).toBeLessThan(issued);
-    expect(issued).toBeLessThan(allowed);
-    expect(allowed).toBeLessThan(revoked);
-    expect(types.slice(revoked + 1)).toContain('authorization.denied');
+    expect(types).toEqual(expect.arrayContaining(['consent.requested', 'credential.verified', 'authorization.approved']));
+    expect(types).not.toContain('consent.approved');
+    expect(types).not.toContain('delegation.issued');
+    const rpLedger = await (await fetch(`http://localhost:${RP_PORT}/api/rp/audit/ledger`)).json();
+    const rpTypes = rpLedger.entries.map((e: { eventType: string }) => e.eventType);
+    expect(rpLedger.recorder.did).toBe(process.env['RP_DID']);
+    expect(rpTypes).toEqual(expect.arrayContaining(['consent.denied', 'consent.approved', 'delegation.issued', 'delegation.revoked']));
+    expect(rpTypes.indexOf('consent.approved')).toBeLessThan(rpTypes.indexOf('delegation.issued'));
+    expect(rpTypes.indexOf('delegation.issued')).toBeLessThan(rpTypes.indexOf('delegation.revoked'));
     expect(types).toContain('tool.call.completed');      // beat 1
     expect(types).toContain('tool.call.failed');         // beats 2, 3 (handler refusals)
     expect(types).toContain('authorization.denied');     // beat 5 (holder binding) and the revoked retry
@@ -236,6 +247,15 @@ describe('the stage, beat by beat', () => {
     const latest = (await (await fetch(`http://localhost:${RP_PORT}/api/rp/audit/latest?ledgerId=${encodeURIComponent('kya:merchant:' + merchantDid.slice(-8).toLowerCase() + ':orders')}&ledgerEpochId=epoch-${new Date().toISOString().slice(0, 10)}`)).json()) as { observations: number; latest: { checkpoint: { core: { rootDigest: string } } } | null };
     expect(latest.observations).toBe(1);
     expect(latest.latest?.checkpoint.core.rootDigest).toBe(r.checkpoint?.rootDigest);
+  });
+
+  it('exports retained legacy revocations with missing scope without poisoning later consent', async () => {
+    const { ConsentFlowStore } = await import('../src/rp/consent-store.js');
+    new ConsentFlowStore().appendEvent({ type: 'delegation.revoked', actor: process.env['RP_DID']!, payload: {
+      credentialId: 'status-list-index-93', index: 93, scope: '', cap: '', currency: '',
+    } });
+    const response = await fetch(`http://localhost:${RP_PORT}/api/rp/audit/export`, { method: 'POST' });
+    expect(response.status, await response.text()).toBe(200);
   });
 
   it('T · an insider WITH the merchant key edits one entry: signature valid, chain + root + inclusion invalid', async () => {

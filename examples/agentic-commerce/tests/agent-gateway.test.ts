@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -76,6 +76,8 @@ afterAll(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+beforeEach(async () => { (await import('../src/agent/store.js')).clearAgentState(); mode = 'challenge'; });
+
 describe('real HTTP agent and MCP gateway consent flow', () => {
   it('starts with no credential and sends an identity proof to receive a verified challenge', async () => {
     const result = await agent.runAgentOrder({ product: 'risotto', quantity: 2 });
@@ -115,25 +117,24 @@ describe('real HTTP agent and MCP gateway consent flow', () => {
     expect(JSON.parse(stdout)).toMatchObject({ verdict: 'NEEDS_AUTHORIZATION', error: 'needs_authorization' });
   });
 
-  it('reads approved consent without restarting and binds its first-use token to a changed permitted order', async () => {
-    const { ConsentFlowStore } = await import('../src/rp/consent-store.js');
-    const store = new ConsentFlowStore();
-    const challenge = store.create({ agentDid, audience: merchantDid, product: 'risotto', quantity: 2, productClass: scope, cap: '50.00', currency: 'CHF', validHours: 48 });
-    const approved = await store.approve(challenge.resumeToken, {
-      tool: 'place_order', agent_did: agentDid, session_id: challenge.resumeToken, scopes: JSON.stringify([scope]), selected_scopes: JSON.stringify([scope]),
-    }, () => issue.issueAndActivate({ index: 94, agentDid, audience: merchantDid }));
-    const vc = issue.activeCredential();
+  it('attaches only the credential and fresh holder proof even when legacy agent storage contains a first-use token', async () => {
+    const { saveAgentState, readAgentState, AGENT_STATE_FILE } = await import('../src/agent/store.js');
+    const vc = await issue.issueDelegation({ index: 94, agentDid, audience: merchantDid });
+    // Old workshop state must remain usable without a reset or another consent.
+    saveAgentState({ credential: vc, ...{ resumeToken: 'legacy-agent-owned-token' } });
+    const saved = fs.readFileSync(AGENT_STATE_FILE, 'utf8');
     mode = 'allow';
     const result = await agent.runAgentOrder({ product: 'risotto', quantity: 1 });
     expect(result.presented.credentialId).toBe(vc.id);
     expect(lastArgs['_kyaos_delegation']).toEqual(vc);
-    expect(lastArgs['resumeToken']).toBe(challenge.resumeToken);
+    expect(lastArgs).not.toHaveProperty('resumeToken');
     const proof = lastArgs['_kyaos_proof'] as DetachedProof;
     const { toHolderBindingRequest, computeCanonicalHashes } = await import('@kya-os/mcp');
     const hashes = await computeCanonicalHashes(toHolderBindingRequest('place_order', lastArgs), undefined, (bytes) => crypto.hash(bytes));
     expect(proof.meta.requestHash).toBe(hashes.requestHash);
-    store.consume(challenge.resumeToken, { agentDid, audience: merchantDid, credentialId: approved.credentialId!, credentialDigest: approved.credentialDigest! });
+    expect(readAgentState()).not.toHaveProperty('resumeToken');
     await agent.runAgentOrder({ product: 'risotto', quantity: 2 });
     expect(lastArgs).not.toHaveProperty('resumeToken');
+    expect(fs.readFileSync(AGENT_STATE_FILE, 'utf8')).toBe(saved);
   });
 });

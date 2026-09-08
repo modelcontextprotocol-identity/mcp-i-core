@@ -24,9 +24,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { generateDidKeyFromBase64, generateRequestProof, type DelegationCredential } from '@kya-os/mcp';
 import { cryptoProvider, loadAgentIdentity, merchantOrigin, requiredEnv, rpOrigin, SCOPE_PRODUCT_CLASS, type KeyedIdentity } from '../lib/wiring.js';
-import { activeCredentialOrNull } from '../rp/issue.js';
-import { ConsentFlowStore } from '../rp/consent-store.js';
-import { verifyMerchantOrderResponse, type MerchantToolResult } from './authorization.js';
+import { readAgentState, saveAgentState } from './store.js';
+import { ConsentProtocol } from '../lib/consent-protocol.js';
+import { verifyConsentEvidence, tokenReference } from '../lib/consent-evidence.js';
+import type { ConsentChallenge } from '../lib/consent-contract.js';
+import { responseBody, verifyMerchantOrderResponse, type MerchantToolResult } from './authorization.js';
 import { isMainModule } from '../lib/main-module.js';
 import type { DiscoveryDocument } from '../merchant/well-known.js';
 
@@ -79,10 +81,11 @@ export interface AgentOrderOutcome {
 }
 
 /**
- * One order attempt over MCP with a fresh holder proof. An approved grant and
- * its first-use resume token are read from persistent storage on every call.
+ * One order attempt over MCP with a fresh holder proof. The approved grant
+ * is read from agent-owned storage on every call.
+ * Pending credentials are picked up from the RP over authenticated HTTP.
  */
-export async function runAgentOrder(options: {
+export interface AgentOrderOptions {
   product: string;
   quantity?: number;
   serverUrl?: string;
@@ -90,10 +93,20 @@ export async function runAgentOrder(options: {
   identity?: KeyedIdentity;
   /** Explicit null models an agent with no grant; omitted reloads the local store. */
   credential?: DelegationCredential | null;
-  resumeToken?: string;
   /** Theft simulation: present the REAL credential, sign the proof with a fresh key. */
   forge?: boolean;
-}): Promise<AgentOrderOutcome> {
+}
+// One single-user gateway owns this store. Serialize its application transitions
+// across stateless MCP connections so overlapping challenge/pickup requests
+// cannot overwrite each other's pending grant.
+let orderTail: Promise<unknown> = Promise.resolve();
+export function runAgentOrder(options: AgentOrderOptions): Promise<AgentOrderOutcome> {
+  if (options.credential !== undefined) return performAgentOrder(options);
+  const next = orderTail.then(() => performAgentOrder(options));
+  orderTail = next.catch(() => {});
+  return next;
+}
+async function performAgentOrder(options: AgentOrderOptions): Promise<AgentOrderOutcome> {
   const serverUrl = options.serverUrl ?? `${merchantOrigin()}/mcp`;
   let identity = options.identity ?? loadAgentIdentity();
   if (options.forge) {
@@ -101,19 +114,37 @@ export async function runAgentOrder(options: {
     const thiefDid = generateDidKeyFromBase64(stolen.publicKey);
     identity = { did: thiefDid, kid: `${thiefDid}#${thiefDid.replace('did:key:', '')}`, privateKeyBase64: stolen.privateKey, publicKeyBase64: stolen.publicKey };
   }
-  const credential = options.credential === undefined ? activeCredentialOrNull() : options.credential;
+  const local = options.credential === undefined;
+  let state = readAgentState();
+  let credential = local ? state.credential ?? null : options.credential;
   const quantity = options.quantity ?? 1;
   // The demo pins the merchant identity locally. Neither an unverified
   // credential nor network discovery may replace this trust anchor.
   const audience = options.audience ?? requiredEnv('MERCHANT_DID');
-  const flow = credential?.id ? new ConsentFlowStore().findByCredential(credential.id) : undefined;
-  const resumeToken = options.resumeToken ?? (flow?.state === 'approved'
-    && flow.bindings.agentDid === identity.did && flow.bindings.audience === audience
-      ? flow.challenge.resumeToken : undefined);
-
+  if (local && !credential && state.pending && !options.forge) {
+    const pickup = await new ConsentProtocol().request('/consent/pickup', 'consent.pickup', {
+      resumeToken: state.pending.resumeToken, audience,
+    }, identity);
+    if (pickup['state'] === 'approved') {
+      const received = pickup['credential'] as DelegationCredential;
+      const consent = verifyConsentEvidence(received, requiredEnv('RP_DID'));
+      if (received.credentialSubject.id !== identity.did || consent.audience !== audience
+        || consent.consentRef !== tokenReference(state.pending.resumeToken)) throw new Error('CONSENT_BINDING_MISMATCH: credential pickup does not belong to this agent and consent request');
+      state = { credential: received };
+      saveAgentState(state);
+      credential = received;
+    } else if (pickup['state'] === 'pending' && state.challengeResult) {
+      // This is the previously verified challenge, not a new merchant decision.
+      // Keep its URL stable while the human is approving it.
+      return { result: state.challengeResult, elapsedMs: 0, agentDid: identity.did,
+        presented: { product: options.product, quantity, credentialId: null, audience } };
+    } else if (['denied', 'expired', 'failed'].includes(String(pickup['state']))) {
+      state = {};
+      saveAgentState(state);
+    } else throw new Error('CONSENT_PROTOCOL_INVALID: unexpected pickup state');
+  }
   const args: Record<string, unknown> = { product: options.product, quantity,
     ...(credential ? { _kyaos_delegation: credential } : {}),
-    ...(resumeToken ? { resumeToken } : {}),
   };
   args['_kyaos_proof'] = await generateRequestProof({
     identity: { did: identity.did, kid: identity.kid, privateKey: identity.privateKeyBase64, publicKey: identity.publicKeyBase64 },
@@ -135,6 +166,12 @@ export async function runAgentOrder(options: {
       args, merchantDid: audience, agentDid: identity.did,
       consentOrigin: consentOrigin.origin, scope: SCOPE_PRODUCT_CLASS,
     });
+    if (local && !options.forge) {
+      const body = responseBody(result);
+      if (body['error'] === 'needs_authorization') {
+        saveAgentState({ pending: body as unknown as ConsentChallenge, challengeResult: result });
+      }
+    }
     return {
       result: result as AgentOrderOutcome['result'],
       elapsedMs: Date.now() - started,

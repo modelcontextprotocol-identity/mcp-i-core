@@ -10,6 +10,7 @@ import { renderConsent } from './consent-page.js';
 import { ConsentWebauthn } from './consent-webauthn.js';
 import type { HumanIdentityAuth } from './human-identity.js';
 import { buildDemoConsent } from './demo-consent.js';
+import { tokenReference, type ConsentEvidence } from '../lib/consent-evidence.js';
 import {
   ConsentFlowError,
   ConsentFlowStore,
@@ -26,6 +27,7 @@ export interface ConsentRoutesConfig {
   broadcast: (event: Record<string, unknown>) => void;
   consentWebauthn?: boolean;
   identityAuth?: HumanIdentityAuth;
+  recordDecision?: () => Promise<unknown>;
 }
 
 async function parseFields(c: Context): Promise<ConsentFields> {
@@ -140,6 +142,7 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
     return c.html(renderConsent(flow, config, new URL(c.req.url).origin, account));
   });
   app.get('/consent/status', (c) => {
+    c.header('Cache-Control', 'no-store');
     const flow = store.get(c.req.query('resume_token') ?? '');
     if (!flow) return c.json({ error: 'consent_missing' }, 404);
     return c.json({
@@ -187,6 +190,13 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
       const demoConsent = account && authentication
         ? buildDemoConsent(account, authentication, token)
         : undefined;
+      const consent: ConsentEvidence = {
+        profile: 'urn:kya-os:example:agentic-commerce:consent:v1', consentRef: tokenReference(token),
+        approvedAt: new Date().toISOString(), agentDid: flow.bindings.agentDid, audience: flow.bindings.audience,
+        scopes: flow.approvedScopes, cap: { maxAmount: flow.bindings.cap, currency: flow.bindings.currency, per: 'order' },
+        validHours: flow.bindings.validHours,
+        authentication: demoConsent ? 'google+webauthn' : authentication ? 'webauthn' : 'rp-local-approval',
+      };
       const list = await ensureStatusList({
         identity: config.identity,
         signingFunction: makeVcSigningFunction(
@@ -212,9 +222,11 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
         identity: config.identity,
         statusListUrl: config.statusListUrl,
         ...(demoConsent ? { demoConsent } : {}),
+        consent,
       });
       return { ...issued, ...(authentication ? { authentication } : {}) };
     });
+    await config.recordDecision?.();
     config.broadcast({
       type: 'consent.approved',
       resumeToken: token,
@@ -241,6 +253,7 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
     const pending = store.requirePending(token);
     trusted(pending);
     const flow = store.deny(token, fields, config.identity.did);
+    await config.recordDecision?.();
     config.broadcast({
       type: 'consent.denied',
       resumeToken: token,
