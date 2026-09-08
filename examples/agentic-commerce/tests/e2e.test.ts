@@ -10,9 +10,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { NodeCryptoProvider, generateDidKeyFromBase64 } from '@kya-os/mcp';
 
 const crypto = new NodeCryptoProvider();
+// Paths relative to the example, not to whoever's cwd runs vitest.
+const EXAMPLE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const SCRIPTS = path.join(EXAMPLE_ROOT, 'scripts');
+/** The published package's audit CLI, wherever the example resolved the package from. */
+const AUDIT_CLI = path.join(path.dirname(createRequire(import.meta.url).resolve('@kya-os/mcp/package.json')), 'dist', 'audit', 'cli.js');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentic-commerce-'));
 const RP_PORT = 14950 + Math.floor(Math.random() * 1000);
 const MERCHANT_PORT = RP_PORT + 1;
@@ -124,7 +131,7 @@ describe('the stage, beat by beat', () => {
     // and a tampered content array is refused by the same script
     const last = (await (await fetch(`http://localhost:${MERCHANT_PORT}/api/receipt/last`)).json()) as { content: Array<{ text: string }> };
     const tampered = { receipt: { ...last, content: [{ type: 'text', text: last.content[0]!.text.replace('"ok":true', '"ok":false') }] }, merchant: { did: merchantDid, kid: `${merchantDid}#x`, publicKeyBase64: process.env['MERCHANT_PUBLIC_KEY_BASE64'] } };
-    const py = spawnSync('python3', [path.join(process.cwd(), 'scripts', 'verify-receipt.py')], { input: JSON.stringify(tampered), encoding: 'utf8' });
+    const py = spawnSync('python3', [path.join(SCRIPTS, 'verify-receipt.py')], { input: JSON.stringify(tampered), encoding: 'utf8' });
     expect(py.status).toBe(1);
     expect(py.stdout).toMatch(/responseHash/);
   });
@@ -196,8 +203,7 @@ describe('the stage, beat by beat', () => {
   it('E · the exported bundle passes the SDK CLI and stdlib Python; the edited one fails both', async () => {
     const e = (await (await fetch(`http://localhost:${MERCHANT_PORT}/api/act/export`, { method: 'POST' })).json()) as { files: { bundle: string; tampered: string; policy: string; keys: string }; components: Array<{ path: string }> };
     expect(e.components.map((c) => c.path).sort()).toEqual(['checkpoints.json', 'entries.json', 'inclusion-proofs.json', 'observations.json']);
-    const cli = path.join(process.cwd(), 'node_modules', '@kya-os', 'mcp', 'dist', 'audit', 'cli.js');
-    const run = (bundle: string) => spawnSync(process.execPath, [cli, 'verify', bundle, '--policy', e.files.policy, '--keys', e.files.keys], { encoding: 'utf8' });
+    const run = (bundle: string) => spawnSync(process.execPath, [AUDIT_CLI, 'verify', bundle, '--policy', e.files.policy, '--keys', e.files.keys], { encoding: 'utf8' });
     const ok = run(e.files.bundle);
     expect(ok.status, ok.stderr).toBe(0);
     expect((JSON.parse(ok.stdout) as { anchorIntegrity: { verdict: string } }).anchorIntegrity.verdict).toBe('valid');
@@ -205,7 +211,7 @@ describe('the stage, beat by beat', () => {
     expect(bad.status).toBe(1);
     expect((JSON.parse(bad.stdout) as { chainIntegrity: { reasonCodes: string[] } }).chainIntegrity.reasonCodes).toContain('AUDIT_PREDECESSOR_MISMATCH');
 
-    const py = (bundle: string) => spawnSync('python3', [path.join(process.cwd(), 'scripts', 'verify-ledger.py'), bundle, '--keys', e.files.keys, '--quiet'], { encoding: 'utf8' });
+    const py = (bundle: string) => spawnSync('python3', [path.join(SCRIPTS, 'verify-ledger.py'), bundle, '--keys', e.files.keys, '--quiet'], { encoding: 'utf8' });
     const pyOk = py(e.files.bundle);
     expect(pyOk.status, pyOk.stderr).toBe(0);
     const okReport = JSON.parse(pyOk.stdout) as { verdict: string; dimensions: Record<string, string>; checks: number };
