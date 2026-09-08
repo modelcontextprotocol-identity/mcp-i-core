@@ -1,5 +1,5 @@
 {
-  "_comment": "EDIT THE PATHS: replace /ABSOLUTE/PATH/TO/kya-os-mcp with the real absolute path of your clone (and the node path with `which node`). Merge the entry into your existing claude_desktop_config.json (macOS: ~/Library/Application Support/Claude/claude_desktop_config.json). Absolute paths are deliberate: Claude Desktop is a GUI app and does NOT have your shell's PATH. The gateway loads the agent key + delegation from the example's .env.local and var/ (anchored to the example dir, not cwd). Fully quit and reopen Claude Desktop after editing. Start `npm run demo` first.",
+  "_comment": "EDIT THE PATHS: replace /ABSOLUTE/PATH/TO/kya-os-mcp with your clone path and /ABSOLUTE/PATH/TO/node with the result of `which node`. Merge this entry into your existing Claude Desktop config (macOS: ~/Library/Application Support/Claude/claude_desktop_config.json). Absolute paths are required because Claude Desktop does not inherit your shell PATH. Run `npm run setup && npm run demo` first. Setup creates agent keys but no active grant. The gateway exposes only browse_catalog and place_order, verifies the signed authorizationUrl, and reloads the approved credential and matching resume token for the first order within that grant's product class and cap. The workshop script repeats the same order for clarity. Fully quit and reopen Claude Desktop after editing. The gateway loads .env.local and var/ relative to the example directory regardless of its working directory.",
   "mcpServers": {
     "kya-shopping-agent": {
       "command": "/ABSOLUTE/PATH/TO/node",
@@ -9,7 +9,8 @@
       ],
       "env": {
         "MERCHANT_PORT": "4949",
-        "RP_PORT": "4950"
+        "RP_PORT": "4950",
+        "RP_ORIGIN": "http://127.0.0.1:4950"
       }
     }
   }

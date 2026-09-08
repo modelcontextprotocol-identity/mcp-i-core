@@ -6,7 +6,10 @@
  *
  * Usage: npm run revoke [-- --index 94] [--restore]
  */
-import { STATUS_LIST_URL, loadRpIdentity, makeVcSigningFunction, type KeyedIdentity } from '../lib/wiring.js';
+import { STATUS_LIST_URL, loadRpIdentity, makeVcSigningFunction, readJson, type KeyedIdentity } from '../lib/wiring.js';
+import { activeIndex, delegationFile } from './issue.js';
+import { ConsentFlowStore } from './consent-store.js';
+import type { DelegationCredential } from '@kya-os/mcp';
 import { ensureStatusList, loadStatusList, readBit, resignWithBit, saveStatusListVersion, type StatusListMeta } from './statuslist.js';
 
 export interface RevokePhase {
@@ -48,13 +51,22 @@ export async function revokeIndex(
   const bit = await readBit(loadStatusList()!, index);
   if (bit !== revoked) throw new Error(`Published list disagrees: bit ${index} is not ${revoked ? 'set' : 'clear'}`);
 
+  if (revoked) {
+    const vc = readJson<DelegationCredential>(delegationFile(index));
+    const scope = vc?.credentialSubject.delegation.constraints.crisp?.scopes?.[0];
+    new ConsentFlowStore().appendEvent({ type: 'delegation.revoked', actor: identity.did, payload: {
+      credentialId: vc?.id ?? `status-list-index-${index}`, index, scope: scope?.resource ?? '',
+      cap: scope?.constraints?.['maxAmount'] ?? '', currency: scope?.constraints?.['currency'] ?? '',
+      statusListUrl: url, version: meta.version, at: meta.updatedAt,
+    } });
+  }
   return { index, revoked, version: meta.version, publishedAt: meta.updatedAt, totalMs: Date.now() - started };
 }
 
 const isMain = process.argv[1]?.endsWith('revoke.ts');
 if (isMain) {
   const indexArg = process.argv.indexOf('--index');
-  const index = Number(indexArg > -1 ? process.argv[indexArg + 1]! : '94');
+  const index = Number(indexArg > -1 ? process.argv[indexArg + 1]! : activeIndex());
   const restore = process.argv.includes('--restore');
   revokeIndex(index, { restore, onPhase: (p) => console.log(`[+${String(p.elapsedMs).padStart(5)} ms] ${p.phase}: ${p.detail}`) })
     .then((r) => {

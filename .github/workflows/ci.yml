@@ -78,6 +78,64 @@ jobs:
           }
           Write-Host "No product contamination found"
 
+  agentic-commerce:
+    name: Agentic commerce (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['20.x', '22.x']
+    defaults:
+      run:
+        working-directory: examples/agentic-commerce
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # Standalone example: exercise the published packages with no sibling
+      # checkout or root-library aliases. Example lockfiles are not committed.
+      - name: Install example dependencies from npm
+        run: npm install --no-audit --no-fund
+
+      - name: Type check example
+        run: npm run typecheck
+
+      - name: Test consent, delegation, receipt and witnessed audit flows
+        run: npm test
+
+      - name: Set up browser test Python
+        if: matrix.node-version == '22.x'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install browser test dependencies
+        if: matrix.node-version == '22.x'
+        run: |
+          python3 -m pip install playwright==1.62.0
+          python3 -m playwright install --with-deps chromium
+
+      - name: Test real browser consent with a virtual FIDO2 authenticator
+        if: matrix.node-version == '22.x'
+        run: npm run test:webauthn:browser
+
+      - name: Test account-bound passkey consent with fictional Google identity
+        if: matrix.node-version == '22.x'
+        run: npm run test:google:browser
+
+      - name: Upload browser evidence
+        if: always() && matrix.node-version == '22.x'
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentic-commerce-browser-evidence
+          path: |
+            examples/agentic-commerce/docs/screenshots/webauthn/
+            examples/agentic-commerce/docs/screenshots/google-identity/
+          if-no-files-found: ignore
+          retention-days: 7
+
   conformance:
     name: Protocol Conformance Harness
     runs-on: ubuntu-latest

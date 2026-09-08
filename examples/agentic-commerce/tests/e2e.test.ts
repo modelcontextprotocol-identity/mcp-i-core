@@ -34,7 +34,7 @@ async function order(product: string, quantity = 1, forge = false) {
   const outcome = await agent.runAgentOrder({ product, quantity, forge, serverUrl: `http://localhost:${MERCHANT_PORT}/mcp`, audience: merchantDid });
   const text = outcome.result.content?.[0]?.text ?? '{}';
   const body = JSON.parse(text) as Record<string, unknown>;
-  return { denied: !!outcome.result.isError, code: body['error'] as string | undefined, reason: String(body['reason'] ?? body['message'] ?? ''), body, meta: outcome.result._meta };
+  return { denied: !!outcome.result.isError || !!body['error'], code: body['error'] as string | undefined, reason: String(body['reason'] ?? body['message'] ?? ''), body, meta: outcome.result._meta };
 }
 
 beforeAll(async () => {
@@ -64,13 +64,11 @@ beforeAll(async () => {
   merchantMod = await import('../src/merchant/server.js');
   agent = await import('../src/agent/agent.js');
   const { ensureStatusList } = await import('../src/rp/statuslist.js');
-  const { issueAndActivate } = await import('../src/rp/issue.js');
   const { loadRpIdentity, makeVcSigningFunction, STATUS_LIST_URL } = await import('../src/lib/wiring.js');
 
   const identity = loadRpIdentity();
   rpMod.ensureDidDocument(identity);
   await ensureStatusList({ identity, signingFunction: makeVcSigningFunction(identity.privateKeyBase64), url: STATUS_LIST_URL });
-  await issueAndActivate({ index: 94, agentDid: process.env['AGENT_DID']!, audience: merchantDid, identity, statusListUrl: STATUS_LIST_URL });
 
   rp = rpMod.startRpServer(RP_PORT);
   merchant = await merchantMod.startMerchantServer({ port: MERCHANT_PORT, auditDir: path.join(tmp, 'audit') });
@@ -78,10 +76,18 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((r) => merchant.httpServer.close(() => r()));
-  await new Promise<void>((r) => rp.server.close(() => r()));
+  if (merchant) await new Promise<void>((r) => merchant.httpServer.close(() => r()));
+  if (rp) await new Promise<void>((r) => rp.server.close(() => r()));
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+type Challenge = { authorizationUrl: string; resumeToken: string; expiresAt: number; scopes: string[] };
+async function consent(challenge: Challenge, decision: 'approve' | 'deny') {
+  return fetch(new URL(`/consent/${decision}`, challenge.authorizationUrl), {
+    method: 'POST',
+    body: new URLSearchParams({ tool: 'place_order', scopes: JSON.stringify(challenge.scopes), selected_scopes: JSON.stringify(challenge.scopes), agent_did: process.env['AGENT_DID']!, session_id: challenge.resumeToken }),
+  });
+}
 
 describe('the stage, beat by beat', () => {
   it('0 · discovery: the agent reads acceptedTrustSchemes and decides to present', async () => {
@@ -90,6 +96,49 @@ describe('the stage, beat by beat', () => {
     expect(d.scheme?.['id']).toBe('org.kya-os/delegation');
     expect(d.audience).toBe(merchantDid);
     expect(d.clockSkewSeconds).toBe(120);
+  });
+
+  it('the agent starts with no delegation and receives a signed, bound human-consent challenge', async () => {
+    expect(fs.existsSync(path.join(tmp, 'var', 'delegation-94.json'))).toBe(false);
+    const r = await order('risotto', 2);
+    expect(r.code).toBe('needs_authorization');
+    const challenge = r.body as unknown as Challenge;
+    expect(challenge.scopes).toContain('https://id.gs1.org/01/09506000134352');
+    expect(challenge.expiresAt).toBeGreaterThan(Date.now() / 1000);
+    const proof = r.meta?.['org.kya-os/response-proof'] as { meta: { outcome: string; responseHash: string } };
+    expect(proof.meta.outcome).toBe('needs_authorization');
+    expect(proof.meta.responseHash).toMatch(/^sha256:/);
+    const page = await fetch(challenge.authorizationUrl);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('mcp-consent');
+    for (const visible of ['09506000134352', '50.00', 'CHF', merchantDid, 'Approve grant']) expect(html).toContain(visible);
+    const denied = await consent(challenge, 'deny');
+    expect(denied.ok).toBe(true);
+    expect((await fetch(`http://localhost:${RP_PORT}/api/rp/delegation`)).status).toBe(404);
+    expect((await consent(challenge, 'approve')).ok).toBe(false);
+  });
+
+  it('human approval issues the original RP credential with the GS1 scope, CHF cap, audience, and status index', async () => {
+    const r = await order('risotto', 2);
+    expect(r.code).toBe('needs_authorization');
+    const challenge = r.body as unknown as Challenge;
+    const forged = await fetch(new URL('/consent/approve', challenge.authorizationUrl), {
+      method: 'POST', body: new URLSearchParams({ tool: 'place_order', scopes: JSON.stringify(['https://id.gs1.org/01/07612345678901']), agent_did: process.env['AGENT_DID']!, session_id: challenge.resumeToken }),
+    });
+    expect(forged.ok).toBe(false);
+    const approved = await consent(challenge, 'approve');
+    expect(approved.ok, await approved.text()).toBe(true);
+    const { credential: vc } = await (await fetch(`http://localhost:${RP_PORT}/api/rp/delegation`)).json();
+    expect(vc.type).toContain('DelegationCredential');
+    expect(vc.issuer).toBe(process.env['RP_DID']);
+    expect(vc.credentialSubject.id).toBe(process.env['AGENT_DID']);
+    expect(vc.credentialSubject.delegation.constraints.audience).toBe(merchantDid);
+    expect(vc.credentialSubject.delegation.constraints.crisp.scopes[0]).toMatchObject({ resource: 'https://id.gs1.org/01/09506000134352', matcher: 'prefix', constraints: { maxAmount: '50.00', currency: 'CHF' } });
+    expect(vc.credentialStatus.statusListIndex).toBe('94');
+    expect((await consent(challenge, 'approve')).ok).toBe(false);
+    const state = await (await fetch(`http://localhost:${MERCHANT_PORT}/api/state`)).json();
+    expect(state.authorizationChallenge).toBeNull();
   });
 
   it('1 · an authorized order inside the class and the cap, with a signed receipt', async () => {
@@ -146,10 +195,14 @@ describe('the stage, beat by beat', () => {
     expect(r.reason).toMatch(/revoked/i);
   });
 
-  it('R · reset issues a fresh grant at the next index and orders work again', async () => {
+  it('R · reset clears authority; another human approval is required', async () => {
     const res = await fetch(`http://localhost:${MERCHANT_PORT}/api/act/reset`, { method: 'POST' });
     const j = (await res.json()) as { index: number };
-    expect(j.index).toBe(95);
+    expect(res.ok).toBe(true);
+    expect((await fetch(`http://localhost:${RP_PORT}/api/rp/delegation`)).status).toBe(404);
+    const challenge = await order('risotto', 1);
+    expect(challenge.code).toBe('needs_authorization');
+    expect((await consent(challenge.body as unknown as Challenge, 'approve')).ok).toBe(true);
     expect((await order('risotto', 1)).denied).toBe(false);
   });
 
@@ -165,6 +218,15 @@ describe('the stage, beat by beat', () => {
     expect(r.tree.length).toBe(2 * r.entries.length - 1);
     expect(r.entries[0]?.eventType).toBe('ledger.epoch.started');
     const types = r.entries.map((e) => e.eventType);
+    expect(types).toEqual(expect.arrayContaining(['consent.requested', 'consent.denied', 'consent.approved', 'delegation.issued', 'delegation.revoked']));
+    const approved = types.indexOf('consent.approved');
+    const issued = types.indexOf('delegation.issued');
+    const allowed = types.indexOf('authorization.approved');
+    const revoked = types.indexOf('delegation.revoked');
+    expect(approved).toBeLessThan(issued);
+    expect(issued).toBeLessThan(allowed);
+    expect(allowed).toBeLessThan(revoked);
+    expect(types.slice(revoked + 1)).toContain('authorization.denied');
     expect(types).toContain('tool.call.completed');      // beat 1
     expect(types).toContain('tool.call.failed');         // beats 2, 3 (handler refusals)
     expect(types).toContain('authorization.denied');     // beat 5 (holder binding) and the revoked retry

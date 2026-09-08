@@ -1,0 +1,420 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 22px 28px 32px;
+  background: #f7f8fa;
+  color: #0f172a;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+}
+main {
+  max-width: 1100px;
+  margin: auto;
+}
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  color: #64748b;
+  margin-bottom: 18px;
+}
+.masthead span:first-child {
+  font-size: 21px;
+  letter-spacing: -0.04em;
+  color: #0f172a;
+}
+consent-capabilities-screen {
+  --cs-action-font-size: 18px;
+  --cs-action-min-height: 54px;
+  max-width: 780px;
+  width: 100%;
+  margin: auto;
+}
+consent-capabilities-screen::part(card) {
+  padding: 30px 38px 22px;
+  gap: 22px;
+  border-radius: 24px;
+}
+consent-capabilities-screen::part(headline) {
+  font-size: 38px;
+  overflow-wrap: anywhere;
+}
+consent-capabilities-screen::part(subhead) {
+  font-size: 16px;
+}
+consent-capabilities-screen:not(:defined) {
+  display: none;
+}
+.identity-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #dbe7df;
+  border-radius: 16px;
+  background: #f0f6f1;
+  padding: 17px 18px;
+}
+.identity-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.identity-card strong {
+  font-size: 20px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.identity-card span:not(.identity-icon):not(.identity-check) {
+  font-size: 12px;
+  color: #476151;
+  line-height: 1.45;
+}
+.identity-card .small-label {
+  font-size: 9px !important;
+}
+.identity-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  color: #fff;
+  background: #355b46;
+  font-family: Georgia, serif;
+  font-size: 22px;
+}
+.identity-check {
+  margin-left: auto;
+  color: #257347;
+  font-size: 21px;
+}
+.small-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-weight: 650;
+  color: #64748b;
+}
+.limits {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  border: 1px solid #e3ded4;
+  border-radius: 16px;
+  background: #f6f2e9;
+  padding: 20px;
+}
+.limits strong {
+  display: block;
+  font-size: 30px;
+  line-height: 1.1;
+  margin-top: 10px;
+  letter-spacing: -0.03em;
+}
+.limits strong small {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: #64748b;
+  letter-spacing: 0;
+  margin-top: 5px;
+}
+.merchant {
+  padding: 18px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+code {
+  display: block;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.6 ui-monospace,
+    SFMono-Regular,
+    monospace;
+  margin-top: 5px;
+  color: #334155;
+}
+.technical-details summary {
+  cursor: pointer;
+  color: #64748b;
+  font-size: 12px;
+  padding-top: 13px;
+}
+.technical-details dl {
+  margin-bottom: 0;
+}
+.technical-details dl > div {
+  margin: 12px 0;
+}
+dt {
+  font-size: 11px;
+  color: #64748b;
+}
+dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.grant-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 15px 18px;
+  border-radius: 13px;
+  background: #f1ece2;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #334155;
+}
+a {
+  color: #24553b;
+  text-underline-offset: 3px;
+}
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+  font-size: 11px;
+  color: #64748b;
+}
+.provenance {
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
+  margin: 18px 0 0;
+}
+#decision-status:not(:empty) {
+  max-width: 780px;
+  margin: 16px auto;
+  padding: 18px 22px;
+  border: 1px solid #c7ddcf;
+  background: #edf6ef;
+  border-radius: 16px;
+  font-size: 18px;
+  line-height: 1.5;
+}
+#decision-status[data-state='error'] {
+  border-color: #e9cdb6;
+  background: #fff5e8;
+}
+#consent-result {
+  max-width: 780px;
+  text-align: center;
+  margin: 40px auto;
+  padding: 70px 30px;
+  border: 1px solid #e2e8f0;
+  border-radius: 24px;
+  background: white;
+}
+#consent-result h1 {
+  font:
+    48px Georgia,
+    serif;
+  margin: 20px 0;
+}
+#consent-result p {
+  color: #64748b;
+}
+.result-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 65px;
+  height: 65px;
+  border-radius: 50%;
+  background: #e0f0e3;
+  color: #257347;
+  font-size: 34px;
+}
+.native-summary,
+.fallback-form {
+  max-width: 780px;
+  margin: 20px auto;
+  padding: 25px;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+.fallback-form button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 30px;
+  margin-top: 14px;
+  padding: 18px;
+  font-size: 18px;
+  background: #0f172a;
+  color: #fff;
+  cursor: pointer;
+}
+.fallback-form .scope-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  line-height: 1.5;
+}
+.fallback-form .scope-choice input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: #0f172a;
+}
+.fallback-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.fallback-form button.deny {
+  background: #f1ece2;
+  color: #0f172a;
+}
+@media (max-width: 600px) {
+  body {
+    padding: 18px 12px 24px;
+  }
+  .masthead {
+    gap: 12px;
+    font-size: 9px;
+    margin: 0 7px 16px;
+  }
+  .masthead span:last-child {
+    text-align: right;
+    max-width: 185px;
+  }
+  consent-capabilities-screen::part(card) {
+    padding: 24px 20px 20px;
+    gap: 20px;
+  }
+  consent-capabilities-screen::part(headline) {
+    font-size: 29px;
+  }
+  .identity-card {
+    padding: 14px 12px;
+    gap: 10px;
+  }
+  .identity-card strong {
+    font-size: 18px;
+  }
+  .limits {
+    padding: 16px;
+    gap: 14px;
+  }
+  .limits strong {
+    font-size: 25px;
+  }
+  .small-label {
+    font-size: 9px;
+  }
+}
+
+/* The same card uses two columns on workshop projectors. Mobile keeps the
+   sequential reading order and every control remains the package's own. */
+@media (min-width: 1100px) {
+  body {
+    padding-top: 16px;
+  }
+  .masthead {
+    margin-bottom: 6px;
+  }
+  consent-capabilities-screen {
+    max-width: 1060px;
+  }
+  consent-capabilities-screen::part(connector) {
+    padding: 0 0 6px;
+  }
+  consent-capabilities-screen::part(card) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'eyebrow eyebrow'
+      'headline headline'
+      'subhead subhead'
+      'identity agent'
+      'permissions details'
+      'notice actions'
+      'footer footer';
+    gap: 16px 28px;
+    padding: 24px 30px 18px;
+  }
+  consent-capabilities-screen::part(eyebrow) {
+    grid-area: eyebrow;
+  }
+  consent-capabilities-screen::part(headline) {
+    grid-area: headline;
+    font-size: 36px;
+  }
+  consent-capabilities-screen::part(subhead) {
+    grid-area: subhead;
+  }
+  consent-capabilities-screen::part(agent) {
+    grid-area: agent;
+    align-self: stretch;
+  }
+  consent-capabilities-screen::part(permissions) {
+    grid-area: permissions;
+    padding-top: 10px;
+  }
+  consent-capabilities-screen::part(actions) {
+    grid-area: actions;
+    align-self: center;
+  }
+  consent-capabilities-screen .identity-card {
+    grid-area: identity;
+    padding: 15px;
+  }
+  consent-capabilities-screen .grant-details {
+    grid-area: details;
+  }
+  consent-capabilities-screen .grant-notice {
+    grid-area: notice;
+    margin: 0;
+  }
+  consent-capabilities-screen .card-footer {
+    grid-area: footer;
+  }
+  .limits {
+    padding: 16px 18px;
+  }
+  .merchant {
+    padding: 12px 0;
+  }
+  .provenance {
+    margin-top: 12px;
+  }
+}
+
+#check-consent-status {
+  display: block;
+  margin: 12px auto 20px;
+  padding: 12px 20px;
+  border: 1px solid #c7ddcf;
+  border-radius: 24px;
+  color: #24553b;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+#check-consent-status:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}

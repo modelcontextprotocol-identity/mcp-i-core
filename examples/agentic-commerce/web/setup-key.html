@@ -23,21 +23,35 @@
   .ok { color:var(--ok); } .err { color:var(--kill); } .dim { color:var(--dim); }
   ul.reg { list-style:none; margin:0 0 16px; font-size:12.5px; color:var(--dim); }
   ul.reg li { padding:3px 0; border-bottom:1px dashed var(--line); }
+  [hidden] { display:none!important; }
+  .account { border:1px solid var(--line); padding:16px; margin:18px 0; }
+  .account strong { display:block; font-size:20px; color:var(--bright); overflow-wrap:anywhere; margin:8px 0; }
+  .account p { font-size:12px; line-height:1.6; }
+  .sign-in { display:block; padding:14px; margin-top:14px; border:1px solid var(--ok); color:var(--ok); text-align:center; text-decoration:none; font-weight:700; }
+  .label-note { color:var(--dim); font-size:11px; line-height:1.5; margin:-8px 0 16px; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>Responsible Party · <span class="k">authenticator</span> registration</h1>
-  <div class="sub">Register any FIDO2 authenticator — a security key, a conference badge, or this laptop's Touch ID — as a key that can authorize revocation. Register more than one: whichever is in your hand on stage works. The hub must be running with <code>KEY_SETUP=1</code>.</div>
+  <h1>Your account and <span class="k">passkey</span></h1>
+  <div class="sub">Register a platform passkey, security key or FIDO2 badge to approve a grant for the shopping agent.</div>
+  <section class="account" id="account-panel" hidden aria-label="Signed-in account">
+    <p class="ok">Google account → passkey → consent → agent</p>
+    <strong id="account-name"></strong>
+    <p id="account-source"></p>
+    <a id="sign-in" class="sign-in" hidden>Sign in with Google</a>
+  </section>
+  <div class="sub" id="legacy-note">Local demo registration requires <code>KEY_SETUP=1</code>. Grant issuance and revocation have independent authenticator flags.</div>
   <ul class="reg" id="registered"><li class="dim">loading registered authenticators…</li></ul>
   <ol>
-    <li>Plug the key in (or use the platform authenticator). Smoke-test at <code>webauthn.io</code> first if unsure.</li>
-    <li>Give it a label, click below, and touch when prompted.</li>
-    <li>Start the demo with <code>KEY_WEBAUTHN=1</code> — revocation now needs a touch. <code>DEMO_BYPASS_WEBAUTHN=1</code> restores the software path.</li>
+    <li>Choose a platform passkey or connect your security key.</li>
+    <li>Click below and confirm the browser's passkey prompt.</li>
+    <li>Return to the consent page, reload it, then approve the agent's grant.</li>
   </ol>
-  <label for="label">label</label>
-  <input id="label" value="DEF CON badge" maxlength="40">
-  <button id="go">Register this authenticator</button>
+  <label for="label">Device label (optional)</label>
+  <input id="label" value="My passkey" maxlength="40">
+  <p class="label-note">This label identifies the device. It is never used as your identity.</p>
+  <button id="go" disabled>Register this passkey</button>
   <div class="out dim" id="out">idle</div>
 </div>
 <script>
@@ -46,28 +60,77 @@
   const say = (msg, cls='') => { out.className = 'out ' + cls; out.textContent = msg; };
   const b64uToBuf = (s) => { const pad='='.repeat((4-s.length%4)%4); const bin=atob((s+pad).replace(/-/g,'+').replace(/_/g,'/')); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); return u.buffer; };
   const bufToB64u = (buf) => { const b=new Uint8Array(buf); let s=''; for(const x of b)s+=String.fromCharCode(x); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,''); };
-  let rp = null;
+  let rp = null, ready = false, identityEnabled = false;
+  const button = document.getElementById('go');
+  async function json(url, options = {}) {
+    const response = await fetch(url, { ...options, credentials: identityEnabled ? 'include' : 'same-origin' });
+    const body = await response.json();
+    if (!response.ok || body.error) throw new Error(body.message || body.error || 'Request failed');
+    return body;
+  }
+
+  function showAuthenticators(authenticators) {
+    const ul = document.getElementById('registered');
+    ul.replaceChildren();
+    for (const authenticator of authenticators) {
+      const item = document.createElement('li');
+      item.textContent = `✓ ${authenticator.label} · …${authenticator.idTail} · ${(authenticator.transports || []).join('/') || 'platform'} · ${String(authenticator.registeredAt || '').slice(0, 16).replace('T', ' ')}`;
+      ul.appendChild(item);
+    }
+    if (!authenticators.length) {
+      const item = document.createElement('li');
+      item.className = 'dim';
+      item.textContent = 'No passkey registered yet.';
+      ul.appendChild(item);
+    }
+  }
 
   async function init() {
+    ready = false;
+    button.disabled = true;
     try {
-      const s = await (await fetch('/api/state')).json();
-      rp = s.responsibleParty.hubOrigin;
-      const l = await (await fetch(rp + '/api/rp/key/list')).json();
-      const ul = document.getElementById('registered');
-      ul.innerHTML = (l.authenticators || []).length
-        ? l.authenticators.map((a) => `<li>✓ ${a.label} · …${a.idTail} · ${(a.transports || []).join('/') || 'platform'} · ${a.registeredAt.slice(0, 16).replace('T', ' ')}</li>`).join('')
-        : '<li class="dim">no authenticator registered yet</li>';
+      let discovered = null;
+      try { discovered = await json('/api/state'); } catch { /* The RP serves this page directly in account mode. */ }
+      rp = discovered?.responsibleParty?.hubOrigin || location.origin;
+      const state = await json(rp + '/api/rp/state');
+      identityEnabled = Boolean(state.googleIdentityEnabled);
+      document.getElementById('account-panel').hidden = !identityEnabled;
+      document.getElementById('legacy-note').hidden = identityEnabled;
+      document.getElementById('sign-in').hidden = true;
+      if (identityEnabled) {
+        const session = await json(rp + '/auth/account');
+        const account = session.signedIn && session.account;
+        document.getElementById('account-name').textContent = account?.displayName || (account ? 'Google account' : 'Sign in to register your passkey');
+        document.getElementById('account-source').textContent = account
+          ? 'Profile name supplied by Google. This is an account identity, not a legal-identity check.'
+          : 'Your identity comes from your Google sign-in. No name is entered here.';
+        if (!account) {
+          const login = new URL('/auth/login', rp);
+          login.searchParams.set('return_to', '/setup-key.html');
+          document.getElementById('sign-in').href = login.href;
+          document.getElementById('sign-in').hidden = false;
+          showAuthenticators([]);
+          say('Sign in with Google before registering a passkey.', 'dim');
+          return false;
+        }
+      }
+      const list = await json(rp + '/api/rp/key/list');
+      showAuthenticators(list.authenticators || []);
+      ready = true;
+      button.disabled = false;
+      return true;
     } catch (e) { say('cannot reach the hub: ' + e.message, 'err'); }
+    return false;
   }
 
   document.getElementById('go').onclick = async () => {
     const btn = document.getElementById('go');
     btn.disabled = true;
     try {
-      if (!rp) await init();
+      if (!ready && !(await init())) return;
       say('requesting registration options…');
       const label = document.getElementById('label').value || 'authenticator';
-      const o = await (await fetch(rp + '/api/rp/key/register/options', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ label }) })).json();
+      const o = await json(rp + '/api/rp/key/register/options', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ label }) });
       if (o.error) { say('hub: ' + o.error, 'err'); btn.disabled = false; return; }
       const publicKey = {
         challenge: b64uToBuf(o.challenge), rp: o.rp,
@@ -85,11 +148,14 @@
         response: { clientDataJSON: bufToB64u(r.clientDataJSON), attestationObject: bufToB64u(r.attestationObject), ...(r.getTransports ? { transports: r.getTransports() } : {}) },
       };
       say('verifying…');
-      const v = await (await fetch(rp + '/api/rp/key/register/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(attestation) })).json();
-      if (v.verified) { say(`registered ✓  "${label}" …${v.idTail}\n\nStart the demo with KEY_WEBAUTHN=1 to require a touch for revocation (flags are read at startup).`, 'ok'); await init(); }
+      const v = await json(rp + '/api/rp/key/register/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(attestation) });
+      if (v.verified) {
+        await init();
+        say(`Passkey registered ✓ "${label}" …${v.idTail}\n\n${identityEnabled ? 'This passkey is linked to your signed-in Google account. Return to the consent page and reload it, then approve the agent grant.' : 'For grant issuance, enable CONSENT_WEBAUTHN=1, reload the consent page, then approve. Revocation keeps its independent KEY_WEBAUTHN flag.'}`, 'ok');
+      }
       else say('verification failed: ' + (v.error || 'unknown'), 'err');
     } catch (e) { say('cancelled / error: ' + (e && e.message ? e.message : e), 'err'); }
-    btn.disabled = false;
+    btn.disabled = !ready;
   };
   init();
 })();

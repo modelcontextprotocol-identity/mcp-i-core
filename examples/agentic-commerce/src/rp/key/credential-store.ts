@@ -6,29 +6,61 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeJsonAtomic } from '../../lib/atomic-json.js';
 import { DATA_DIR } from '../../lib/wiring.js';
 
 const AUTHENTICATORS_FILE = path.join(DATA_DIR, 'authenticators.json');
 const RECORDS_DIR = path.join(DATA_DIR, 'revocation-records');
 
 export interface StoredAuthenticator {
-  id: string;          // base64url credential id
-  publicKey: string;   // base64url COSE public key
+  id: string; // base64url credential id
+  publicKey: string; // base64url COSE public key
   counter: number;
   transports?: string[];
   aaguid?: string;
-  label: string;       // "DEF CON badge", "YubiKey", "Touch ID"…
+  label: string; // "DEF CON badge", "YubiKey", "Touch ID"…
   registeredAt: string;
+  /** Opaque RP account reference, set only after authenticated registration. */
+  accountId?: string;
 }
 
 export function listAuthenticators(): StoredAuthenticator[] {
-  if (!fs.existsSync(AUTHENTICATORS_FILE)) return [];
+  let raw: string;
   try {
-    const parsed = JSON.parse(fs.readFileSync(AUTHENTICATORS_FILE, 'utf8')) as unknown;
-    return Array.isArray(parsed) ? (parsed as StoredAuthenticator[]) : [];
-  } catch {
-    return [];
+    raw = fs.readFileSync(AUTHENTICATORS_FILE, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw new Error('Registered authenticator store cannot be read.');
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error('Registered authenticator store is malformed.');
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some(
+      (value) =>
+        !value ||
+        typeof value !== 'object' ||
+        typeof value.id !== 'string' ||
+        !value.id ||
+        typeof value.publicKey !== 'string' ||
+        !value.publicKey ||
+        !Number.isInteger(value.counter) ||
+        value.counter < 0 ||
+        typeof value.label !== 'string' ||
+        typeof value.registeredAt !== 'string' ||
+        (value.accountId !== undefined &&
+          (typeof value.accountId !== 'string' || !value.accountId)),
+    )
+  ) {
+    throw new Error(
+      'Authenticator store is invalid. Issuance requires repair of the registered-key store.',
+    );
+  }
+  return parsed as StoredAuthenticator[];
 }
 
 export function hasAuthenticator(): boolean {
@@ -40,8 +72,7 @@ export function findAuthenticator(id: string): StoredAuthenticator | undefined {
 }
 
 function persist(list: StoredAuthenticator[]): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(AUTHENTICATORS_FILE, JSON.stringify(list, null, 2), { mode: 0o600 });
+  writeJsonAtomic(AUTHENTICATORS_FILE, list);
 }
 
 export function saveAuthenticator(cred: StoredAuthenticator): void {

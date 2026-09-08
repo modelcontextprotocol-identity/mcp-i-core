@@ -28,6 +28,7 @@
  */
 import http from 'node:http';
 import path from 'node:path';
+import { isMainModule } from '../lib/main-module.js';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
@@ -40,6 +41,12 @@ import { getRequestListener } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import {
   createKyaOsMiddleware,
+  assertHolderBinding,
+  toHolderBindingRequest,
+  ProofVerifier,
+  SystemClockProvider,
+  MemoryNonceCacheProvider,
+  type DetachedProof,
   didWebToUrl,
   KYA_OS_PROOF_META_KEY,
   type DelegationCredential,
@@ -51,6 +58,10 @@ import {
   RP_DID,
   RP_DID_MIRROR_URL,
   STATUS_LIST_URL,
+  SCOPE_PRODUCT_CLASS,
+  SPEND_CAP,
+  SPEND_CURRENCY,
+  VALID_HOURS,
   WEB_DIR,
   cryptoProvider,
   env,
@@ -63,7 +74,10 @@ import {
 } from '../lib/wiring.js';
 import { DemoFetchProvider } from '../lib/mirror-fetch.js';
 import { HttpStatusListResolver, ed25519PublicKeyBase64 } from '../lib/http-statuslist-resolver.js';
+import { requireCredentialStore } from './require-credential-store.js';
 import { createMerchantAudit } from './audit.js';
+import { ConsentFlowError, ConsentFlowStore } from '../rp/consent-store.js';
+import { createConsentAuditBridge, consentDigest } from './consent-audit.js';
 import { CATALOG } from '../lib/product.js';
 import { buildDiscoveryDocument } from './well-known.js';
 import { decideOrder, summarizeMandate, type Mandate } from './place-order.js';
@@ -105,26 +119,31 @@ export function merchantConfigFromEnv(overrides: Partial<MerchantAppConfig> = {}
   };
 }
 
-type GateState = 'pass' | 'fail' | 'skip';
+type GateState = 'pass' | 'fail' | 'skip' | 'pending';
 export interface GateChecks {
   signature: GateState; revocation: GateState; holder: GateState;
-  product: GateState; cap: GateState; receipt: GateState;
+  product: GateState; cap: GateState; consent: GateState; receipt: GateState;
 }
 
 /**
- * Map an outcome to the six gates, honestly following the middleware's ACTUAL
+ * Map an outcome to the seven gates, following the middleware's actual
  * order: basic+signature (window, audience) → status (revocation) → holder
  * binding → flat scope → [handler] product class → spend cap → signed receipt.
  */
-export function checksFromOutcome(verdict: 'allowed' | 'denied', code: string | undefined, reason: string): GateChecks {
-  if (verdict === 'allowed') return { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'pass', cap: 'pass', receipt: 'pass' };
-  if (code === 'holder_binding_failed') return { signature: 'pass', revocation: 'pass', holder: 'fail', product: 'skip', cap: 'skip', receipt: 'skip' };
-  if (/revoked|status_unresolvable|status list/i.test(reason)) return { signature: 'pass', revocation: 'fail', holder: 'skip', product: 'skip', cap: 'skip', receipt: 'skip' };
-  if (code === 'PRODUCT_OUT_OF_SCOPE') return { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'fail', cap: 'skip', receipt: 'skip' };
-  if (code === 'SPEND_CAP_EXCEEDED' || code === 'CURRENCY_MISMATCH' || code === 'NO_CAP_IN_CREDENTIAL') return { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'pass', cap: 'fail', receipt: 'skip' };
-  if (code === 'UNKNOWN_PRODUCT' || code === 'INVALID_PRODUCT_URI' || code === 'INVALID_QUANTITY') return { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'fail', cap: 'skip', receipt: 'skip' };
-  // Any other delegation_invalid (expired, wrong audience, bad signature) → the first gate.
-  return { signature: 'fail', revocation: 'skip', holder: 'skip', product: 'skip', cap: 'skip', receipt: 'skip' };
+export function checksFromOutcome(verdict: 'allowed' | 'denied', code: string | undefined, reason: string, observed: Partial<GateChecks> = {}): GateChecks {
+  const skipped: GateChecks = { signature: 'skip', revocation: 'skip', holder: 'skip', product: 'skip', cap: 'skip', consent: 'skip', receipt: 'skip' };
+  let inferred: Partial<GateChecks>;
+  if (verdict === 'allowed') inferred = { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'pass', cap: 'pass', consent: 'pass', receipt: 'pass' };
+  else if (code === 'needs_authorization') inferred = { consent: 'pending' };
+  else if (code?.startsWith('CONSENT_')) inferred = { consent: 'fail' };
+  else if (code === 'holder_binding_failed') inferred = { signature: 'pass', revocation: 'pass', holder: 'fail' };
+  else if (/revoked|status_unresolvable|status list/i.test(reason)) inferred = { signature: 'pass', revocation: 'fail' };
+  else if (['PRODUCT_OUT_OF_SCOPE', 'UNKNOWN_PRODUCT', 'INVALID_PRODUCT_URI', 'INVALID_QUANTITY'].includes(code ?? '')) inferred = { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'fail' };
+  else if (['SPEND_CAP_EXCEEDED', 'CURRENCY_MISMATCH', 'NO_CAP_IN_CREDENTIAL'].includes(code ?? '')) inferred = { signature: 'pass', revocation: 'pass', holder: 'pass', product: 'pass', cap: 'fail' };
+  else inferred = { signature: 'fail' };
+  // Handler observations override guesses: a later consent/storage failure
+  // cannot undo credential or holder checks that have already passed.
+  return { ...skipped, ...inferred, ...observed };
 }
 
 export async function createMerchant(config: MerchantAppConfig) {
@@ -167,6 +186,7 @@ export async function createMerchant(config: MerchantAppConfig) {
     {
       identity: { did: identity.did, kid: identity.kid, privateKey: identity.privateKeyBase64, publicKey: identity.publicKeyBase64 },
       autoSession: true,
+      grantStore: requireCredentialStore,
       delegation: {
         fetchProvider,
         didResolver,
@@ -184,26 +204,87 @@ export async function createMerchant(config: MerchantAppConfig) {
   // verified credential reaches the handler through a per-call context: the
   // MCP dispatcher stashes the SAME object the gate verifies, and the handler
   // checks the gate's `authorization.delegationRef` names that credential.
-  const callStore = new AsyncLocalStorage<{ vc: DelegationCredential }>();
+  const callStore = new AsyncLocalStorage<{ vc?: DelegationCredential; args: Record<string, unknown>; agentDid: string; checks: Partial<GateChecks>; challengeError?: unknown }>();
+  const consentStore = new ConsentFlowStore();
+  const consentOrigin = new URL(config.rpOrigin);
+  if (['localhost', '127.0.0.1'].includes(consentOrigin.hostname)) consentOrigin.hostname = (flag('CONSENT_WEBAUTHN') || env('GOOGLE_CLIENT_ID', '')) ? 'localhost' : '127.0.0.1';
+  const consentAudit = createConsentAuditBridge(audit, consentStore, config.rpDid);
+  const requestVerifier = new ProofVerifier({ cryptoProvider, clockProvider: new SystemClockProvider(), nonceCacheProvider: new MemoryNonceCacheProvider(), fetchProvider });
+  let authorizationChallenge: Record<string, unknown> | null = null;
+  const refusal = async (code: string, reason: string) => {
+    await consentAudit.record({ eventType: 'authorization.denied', action: { category: 'authorization', name: 'place_order' },
+      outcome: 'denied', reason: { code }, evidence: [], details: { family: 'authorization', phase: 'denied' } });
+    return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: code, reason }) }] };
+  };
+  const consentFailure = (code: string, reason: string) => refusal(`CONSENT_${code}`, reason);
+  const consentStoreFailure = (error: unknown) => consentFailure(error instanceof ConsentFlowError ? error.code.replace(/^consent_/, '').toUpperCase() : 'UNAVAILABLE', error instanceof Error ? error.message : String(error));
 
   // Demo memory: what the merchant has SEEN (for the console), never for trust.
   let lastMandate: Mandate | null = null;
   let lastReceipt: { body: Record<string, unknown>; proof: unknown; at: string; request: { method: string; params: Record<string, unknown> }; content: unknown } | null = null;
   let orders = 0;
 
+  // Invoke this wrapper inside callStore.run: formatChallenge needs the bound
+  // request, and the handler must use the same VC the delegation gate verified.
   const placeOrderHandler = kyaos.wrapWithDelegation(
     'place_order',
-    { scopeId: 'commerce.order', consentUrl: env('CONSENT_URL', `${config.rpOrigin}/consent`) },
+    {
+      scopeId: 'commerce.order', consentUrl: `${config.rpOrigin}/consent`,
+      formatChallenge: (challenge) => {
+        const call = callStore.getStore();
+        if (!call) throw new Error('No consent request context');
+        // The SDK falls back to its default challenge if this callback throws.
+        // Capture a persistence failure so the dispatcher refuses that fallback.
+        try {
+          const created = consentStore.create({
+            agentDid: call.agentDid, audience: identity.did,
+            product: String(call.args['product'] ?? ''), quantity: Number(call.args['quantity'] ?? 1),
+            productClass: SCOPE_PRODUCT_CLASS, cap: SPEND_CAP, currency: SPEND_CURRENCY, validHours: VALID_HOURS,
+            authorizationOrigin: consentOrigin.origin, resumeToken: challenge.resumeToken, expiresAt: challenge.expiresAt,
+            requestHash: consentDigest({ method: 'place_order', params: call.args }),
+          });
+          authorizationChallenge = { ...created };
+          return [{ type: 'text', text: JSON.stringify(created) }];
+        } catch (error) { call.challengeError = error; throw error; }
+      },
+    },
     kyaos.wrapWithProof('place_order', async (args: Record<string, unknown>, _sessionId?: string, context?: { authorization?: { delegationRef?: string } }) => {
       // The gate has verified signature, window, audience, revocation (fresh),
       // holder key and the flat scope of THIS credential by the time we are here.
-      const vc = callStore.getStore()?.vc;
+      const call = callStore.getStore();
+      const vc = call?.vc;
+      if (call) Object.assign(call.checks, { signature: 'pass', revocation: 'pass', holder: 'pass' });
       const ref = context?.authorization?.delegationRef;
       if (!vc || (ref && ref !== (vc.id ?? vc.credentialSubject.delegation.id))) {
         return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: 'CREDENTIAL_CONTEXT_MISMATCH', message: 'Fail-closed: the verified credential is not the one in the call context' }) }] };
       }
+      // Consent controls issuance/resumption. The existing gate above still owns
+      // signature, audience, status and holder verification; product/cap stay below.
+      let flow;
+      try { flow = consentStore.findByCredential(vc.id ?? ''); }
+      catch (error) { return consentStoreFailure(error); }
+      if (!flow) return consentFailure('REQUIRED', 'Missing human consent for this delegation');
+      const issuerDid = typeof vc.issuer === 'string' ? vc.issuer : vc.issuer.id;
+      if (issuerDid !== config.rpDid || flow.credentialDigest !== consentDigest(vc)) {
+        return consentFailure('CREDENTIAL_MISMATCH', 'Delegation does not match the exact credential issued by the Responsible Party after consent');
+      }
+      const resumeToken = args['resumeToken'];
+      authorizationChallenge = null;
       lastMandate = summarizeMandate(vc);
       const outcome = decideOrder({ product: String(args['product'] ?? ''), quantity: Number(args['quantity'] ?? 1) }, vc);
+      if (call) Object.assign(call.checks, {
+        product: outcome.ok || ['SPEND_CAP_EXCEEDED', 'CURRENCY_MISMATCH', 'NO_CAP_IN_CREDENTIAL'].includes(outcome.error) ? 'pass' : 'fail',
+        cap: outcome.ok ? 'pass' : ['SPEND_CAP_EXCEEDED', 'CURRENCY_MISMATCH', 'NO_CAP_IN_CREDENTIAL'].includes(outcome.error) ? 'fail' : 'skip',
+      });
+      if (outcome.ok) {
+        if (flow.state !== 'consumed' || resumeToken !== undefined) {
+          try {
+            if (typeof resumeToken !== 'string') return consentFailure('RESUME_REQUIRED', 'Missing resumeToken for the approved grant');
+            consentStore.consume(resumeToken, { agentDid: vc.credentialSubject.id, audience: identity.did, credentialId: vc.id ?? '', credentialDigest: consentDigest(vc) });
+          } catch (error) { return consentStoreFailure(error); }
+        }
+        if (call) call.checks.consent = 'pass';
+      }
 
       // The handler's own two gates (product class, cap) go on the same ledger
       // as the middleware's, with the merchant's reason codes. delivery is
@@ -236,7 +317,7 @@ export async function createMerchant(config: MerchantAppConfig) {
         order: { product: outcome.item.uri, gtin: outcome.item.gtin, name: outcome.item.name, quantity: outcome.quantity, unitPrice: `${outcome.currency} ${outcome.item.unitPrice}`, total: outcome.total },
         mandate: outcome.mandate,
         checks: outcome.checks,
-        payment: { status: 'authorized-for-capture', note: 'Spend enforcement and settlement stay with the merchant/PSP; the trust layer never touched the rail.' },
+        payment: { status: 'not-initiated', note: 'Order only. No money moved; payment rails are outside this demonstration.' },
         verifiedAt: new Date().toISOString(),
       };
       return { content: [{ type: 'text', text: JSON.stringify(evidence) }] };
@@ -294,9 +375,30 @@ export async function createMerchant(config: MerchantAppConfig) {
         broadcast({ type: 'request', tool: 'place_order', product: String(a['product'] ?? ''), quantity: Number(a['quantity'] ?? 1), agentDid: (a['_kyaos_delegation'] as DelegationCredential | undefined)?.credentialSubject?.id ?? null });
 
         const vc = a['_kyaos_delegation'] as DelegationCredential | undefined;
-        const result = vc
-          ? await callStore.run({ vc }, () => placeOrderHandler(a, sessionId))
-          : await placeOrderHandler(a, sessionId);
+        const agentDid = vc?.credentialSubject?.id ?? env('AGENT_DID', '');
+        const call = { vc, args: a, agentDid, checks: {} as Partial<GateChecks>, challengeError: undefined as unknown };
+        const invoke = async () => {
+          if (!vc) {
+            call.checks.signature = 'skip';
+            call.checks.revocation = 'skip';
+            const holder = await assertHolderBinding({ proof: a['_kyaos_proof'] as DetachedProof, subjectDid: agentDid, request: toHolderBindingRequest('place_order', a), expectedAudience: identity.did, proofVerifier: requestVerifier });
+            call.checks.holder = holder.status === 'bound' ? 'pass' : 'fail';
+            if (holder.status !== 'bound') return refusal('holder_binding_failed', 'A fresh holder proof bound to this request, agent, and merchant is required before consent.');
+          }
+          try { await consentAudit.flush(); }
+          catch (error) { return consentStoreFailure(error); }
+          if (!vc && a['resumeToken'] !== undefined) {
+            try {
+              const flow = typeof a['resumeToken'] === 'string' ? consentStore.get(a['resumeToken']) : undefined;
+              if (!flow) return consentFailure('MISSING', 'Unknown consent resumeToken');
+              if (flow.challenge.expiresAt <= Math.floor(Date.now() / 1000)) return consentFailure('EXPIRED', 'Consent resumeToken expired');
+              return consentFailure('CREDENTIAL_REQUIRED', `Consent is ${flow.state}; resumption requires its issued credential`);
+            } catch (error) { return consentStoreFailure(error); }
+          }
+          const result = await callStore.run(call, () => placeOrderHandler(a, sessionId));
+          return call.challengeError ? consentStoreFailure(call.challengeError) : result;
+        };
+        const result = await invoke();
 
         const r = result as { isError?: boolean; content?: Array<{ text?: string }>; _meta?: Record<string, unknown> };
         const text = r.content?.[0]?.text ?? '{}';
@@ -306,6 +408,18 @@ export async function createMerchant(config: MerchantAppConfig) {
         const code = body['error'] as string | undefined;
         const reason = String(body['reason'] ?? body['message'] ?? '');
         const proof = r._meta?.[KYA_OS_PROOF_META_KEY] ?? r._meta?.['proof'] ?? null;
+        if (code === 'needs_authorization') {
+          await consentAudit.record({
+            eventType: 'consent.requested', actor: { kind: 'pairwise_did', did: agentDid },
+            responsibleParty: { kind: 'public_did', did: config.rpDid },
+            action: { category: 'consent', name: 'place_order' }, outcome: 'challenged',
+            correlationId: consentDigest({ method: 'place_order', params: a }),
+            resource: { kind: 'keyed_commitment', value: consentDigest(body['authorizationUrl']), keyId: 'authorization-url' },
+            authorization: { source: 'anonymous', decision: 'needs_authorization', scopeId: SCOPE_PRODUCT_CLASS },
+            evidence: [], details: { family: 'consent', phase: 'requested', consentRef: consentDigest(body['resumeToken']) },
+          });
+          broadcast({ type: 'needs_authorization', ...body });
+        }
         if (verdict === 'allowed') {
           // Exactly what the proof binds: the request minus the `_kyaos_*` control
           // args (the gate strips them before the proof wrapper hashes the call)
@@ -321,7 +435,7 @@ export async function createMerchant(config: MerchantAppConfig) {
           code: code ?? null,
           reason: reason || null,
           elapsedMs: Date.now() - started,
-          checks: checksFromOutcome(verdict, code, reason),
+          checks: checksFromOutcome(verdict, code, reason, call.checks),
           body,
           receipt: proof,
           statusList: statusListResolver.lastObservation,
@@ -365,6 +479,7 @@ export async function createMerchant(config: MerchantAppConfig) {
       responsibleParty: { did: config.rpDid, hubOrigin: config.rpOrigin, didDocumentUrl: rpDidUrl, mirror: config.rpDidMirrorUrl, offline: config.offline, ...rpDocument },
       statusList: { url: config.statusListUrl, checkedAt: 'every-call', onUnresolvable: 'fail-closed', last: statusListResolver.lastObservation },
       policy: { holderBinding: 'enforce', revocationCheck: 'fail-closed', spendEnforcement: 'merchant, from credential cap' },
+      authorizationChallenge: authorizationChallenge && consentStore.get(String(authorizationChallenge['resumeToken']))?.state === 'pending' && Number(authorizationChallenge['expiresAt']) > Date.now() / 1000 ? authorizationChallenge : null,
       lastMandate,
       lastReceipt: lastReceipt ? { at: lastReceipt.at, orderId: lastReceipt.body['orderId'] ?? null } : null,
       orders,
@@ -374,9 +489,10 @@ export async function createMerchant(config: MerchantAppConfig) {
   });
 
   // ---- the audit finale: ledger → checkpoint → witness → tamper → export ----------
-  app.get('/api/audit/ledger', async (c) => c.json(await audit.report()));
+  app.get('/api/audit/ledger', async (c) => { await consentAudit.flush(); return c.json(await audit.report()); });
 
   app.post('/api/act/audit', async (c) => {
+    await consentAudit.flush();
     const started = Date.now();
     try {
       const a = await audit.anchor();
@@ -389,6 +505,7 @@ export async function createMerchant(config: MerchantAppConfig) {
   });
 
   app.post('/api/act/tamper', async (c) => {
+    await consentAudit.flush();
     const started = Date.now();
     try {
       const t = await audit.tamper();
@@ -400,6 +517,7 @@ export async function createMerchant(config: MerchantAppConfig) {
   });
 
   app.post('/api/act/export', async (c) => {
+    await consentAudit.flush();
     const started = Date.now();
     try {
       const e = await audit.exportBundle();
@@ -411,6 +529,7 @@ export async function createMerchant(config: MerchantAppConfig) {
   });
 
   app.get('/api/audit/bundle', async (c) => {
+    await consentAudit.flush();
     try {
       const b = await audit.bundle();
       c.header('Content-Disposition', `attachment; filename="kya-audit-bundle-${audit.ledger.ledgerEpochId}.json"`);
@@ -448,11 +567,12 @@ export async function createMerchant(config: MerchantAppConfig) {
   });
 
   app.post('/api/act/reset', async (c) => {
-    // Ask the Responsible Party for a fresh grant (next status-list index).
-    const res = await fetch(`${config.rpOrigin}/api/rp/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    // Start a fresh consent ceremony. Reset never issues authority.
+    const res = await fetch(`${config.rpOrigin}/api/rp/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const issued = (await res.json()) as Record<string, unknown>;
     statusListResolver.invalidateCache();
     lastMandate = null;
+    authorizationChallenge = null;
     broadcast({ type: 'reset', index: issued['index'] ?? null });
     return c.json(issued, res.ok ? 200 : 502);
   });
@@ -481,6 +601,7 @@ export async function createMerchant(config: MerchantAppConfig) {
     return c.json(result);
   });
 
+  if (env('GOOGLE_CLIENT_ID', '')) app.get('/setup-key.html', (c) => c.redirect(new URL('/setup-key.html', consentOrigin).toString()));
   app.use('/*', serveStatic({ root: path.relative(process.cwd(), WEB_DIR) || './web' }));
 
   // ---- one HTTP server: /mcp → MCP transport, everything else → Hono ----------
@@ -526,5 +647,4 @@ export async function startMerchantServer(overrides: Partial<MerchantAppConfig> 
   return { ...merchant, config };
 }
 
-const isMain = process.argv[1]?.endsWith('merchant/server.ts');
-if (isMain) void startMerchantServer();
+if (isMainModule(import.meta.url)) void startMerchantServer();

@@ -32,8 +32,15 @@ import {
   type KeyedIdentity,
 } from '../lib/wiring.js';
 import path from 'node:path';
+import { isMainModule } from '../lib/main-module.js';
+import fs from 'node:fs';
+import { WEB_DIR } from '../lib/wiring.js';
+import { GoogleIdentity } from './google-identity.js';
+import type { HumanIdentityAuth } from './human-identity.js';
 import { ensureStatusList, loadStatusList, loadStatusListMeta, readBit, RP_DIR } from './statuslist.js';
-import { activeIndex, issueAndActivate, delegationFile } from './issue.js';
+import { activeIndex, activeCredentialOrNull, clearActiveCredential } from './issue.js';
+import { createConsentRoutes } from './consent.js';
+import { ConsentFlowStore } from './consent-store.js';
 import { revokeIndex, type RevokePhase } from './revoke.js';
 import { createKeyRoutes } from './key/webauthn-routes.js';
 import { hasAuthenticator, listAuthenticators } from './key/credential-store.js';
@@ -50,9 +57,13 @@ export interface RpAppConfig {
   corsOrigins: string[];
   keySetup: boolean;
   keyWebauthn: boolean;
+  consentWebauthn?: boolean;
   bypassWebauthn: boolean;
   rpID: string;
   origin: string;
+  googleClientId?: string;
+  googleOrigin?: string;
+  identityAuth?: HumanIdentityAuth & { routes?: Hono };
 }
 
 export function buildRpDidDocument(identity: KeyedIdentity): DIDDocument {
@@ -77,9 +88,11 @@ export function createRpApp(config: RpAppConfig): Hono {
   const app = new Hono();
   const { identity } = config;
   const signingFunction = makeVcSigningFunction(identity.privateKeyBase64);
+  const googleOrigin = config.googleOrigin ?? new URL(config.statusListUrl).origin.replace('127.0.0.1', 'localhost');
+  const identityAuth = config.identityAuth ?? new GoogleIdentity({ clientId: config.googleClientId, origin: googleOrigin });
   const keyRequired = () => config.keyWebauthn && !config.bypassWebauthn && hasAuthenticator();
 
-  app.use('/api/*', cors({ origin: config.corsOrigins }));
+  app.use('/api/*', cors({ origin: config.corsOrigins, credentials: identityAuth.enabled }));
   app.use('/status-list', cors({ origin: '*' }));
   app.use('/.well-known/*', cors({ origin: '*' }));
 
@@ -102,6 +115,13 @@ export function createRpApp(config: RpAppConfig): Hono {
     }),
   );
 
+  if (identityAuth.routes) app.route('/', identityAuth.routes);
+  app.get('/setup-key.html', (c) => {
+    c.header('Cache-Control', 'no-store');
+    return c.html(fs.readFileSync(path.join(WEB_DIR, 'setup-key.html'), 'utf8'));
+  });
+  app.route('/', createConsentRoutes({ identity, statusListUrl: config.statusListUrl, agentDid: config.agentDid, merchantDid: config.merchantDid, broadcast, consentWebauthn: config.consentWebauthn, identityAuth }));
+
   // ---- 1. identity ----------------------------------------------------------
   app.get('/.well-known/did.json', (c) => {
     c.header('Cache-Control', 'no-store');
@@ -122,6 +142,9 @@ export function createRpApp(config: RpAppConfig): Hono {
     const meta = loadStatusListMeta();
     const index = activeIndex();
     const bit = list ? await readBit(list, index) : null;
+    let authenticators: ReturnType<typeof listAuthenticators> = [];
+    let authenticatorStoreError: string | null = null;
+    try { authenticators = listAuthenticators(); } catch (error) { authenticatorStoreError = error instanceof Error ? error.message : 'Authenticator store unavailable'; }
     return c.json({
       did: identity.did,
       kid: identity.kid,
@@ -129,45 +152,29 @@ export function createRpApp(config: RpAppConfig): Hono {
       statusListUrl: config.statusListUrl,
       statusList: { version: meta.version, updatedAt: meta.updatedAt, lastAction: meta.lastAction ?? null, issuanceDate: list?.issuanceDate ?? null },
       activeIndex: index,
+      grantIssued: activeCredentialOrNull() !== null,
+      consentRequired: true,
+      consentWebauthn: config.consentWebauthn ?? false,
+      googleIdentityEnabled: identityAuth.enabled,
       revoked: bit,
-      keyRequired: keyRequired(),
+      keyRequired: config.keyWebauthn && !config.bypassWebauthn && (authenticatorStoreError !== null || authenticators.length > 0),
+      authenticatorStoreError,
       keySetup: config.keySetup,
-      authenticators: listAuthenticators().map((a) => ({ label: a.label, idTail: a.id.slice(-6) })),
+      authenticators: authenticators.map((a) => ({ label: a.label, idTail: a.id.slice(-6) })),
     });
   });
 
   // ---- 3a. issue -------------------------------------------------------------
-  app.post('/api/rp/issue', async (c) => {
-    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
-    const requested = Number((body as Record<string, unknown>)['index']);
-    const index = Number.isInteger(requested) && requested >= 0 ? requested : activeIndex() + 1;
-    await ensureStatusList({ identity, signingFunction, url: config.statusListUrl });
-    const { file, vc } = await issueAndActivate({
-      index,
-      agentDid: config.agentDid(),
-      audience: config.merchantDid(),
-      identity,
-      statusListUrl: config.statusListUrl,
-    });
-    const scope = vc.credentialSubject.delegation.constraints.crisp?.scopes?.[0];
-    broadcast({ type: 'issued', index, subject: vc.credentialSubject.id, scope: scope?.resource ?? null });
-    return c.json({
-      index,
-      file,
-      issuer: vc.issuer,
-      subject: vc.credentialSubject.id,
-      audience: vc.credentialSubject.delegation.constraints.audience ?? null,
-      scope: scope ? { resource: scope.resource, matcher: scope.matcher, constraints: scope.constraints ?? {} } : null,
-      expirationDate: vc.expirationDate ?? null,
-      credentialStatus: vc.credentialStatus ?? null,
-    });
+  app.post('/api/rp/issue', (c) => c.json({ error: 'consent_required', message: 'Place an order and approve the signed authorization URL. Direct issuance is disabled.' }, 403));
+  app.post('/api/rp/reset', (c) => {
+    clearActiveCredential(); new ConsentFlowStore().invalidatePending();
+    broadcast({ type: 'grant.reset' });
+    return c.json({ success: true, grantIssued: false, message: 'The agent starts with no grant. Place an order to request fresh human consent.' });
   });
-
   app.get('/api/rp/delegation', (c) => {
-    const index = activeIndex();
-    const vc = readJson(delegationFile(index));
+    const vc = activeCredentialOrNull();
     if (!vc) return c.json({ error: 'no active delegation' }, 404);
-    return c.json({ index, credential: vc });
+    return c.json({ index: activeIndex(), credential: vc });
   });
 
   // ---- 3b. revoke --------------------------------------------------------------
@@ -205,6 +212,8 @@ export function createRpApp(config: RpAppConfig): Hono {
     origin: config.origin,
     rpName: 'KYA-OS Responsible Party',
     setupEnabled: config.keySetup,
+    identityAuth,
+    ...(identityAuth.enabled ? { registrationOrigin: googleOrigin } : {}),
     statusListUrl: () => config.statusListUrl,
     currentIndex: () => activeIndex(),
     performRevoke,
@@ -259,9 +268,12 @@ export function rpConfigFromEnv(overrides: Partial<RpAppConfig> = {}): RpAppConf
     corsOrigins: [merchantOrigin(), `http://localhost:${RP_PORT}`, `http://127.0.0.1:${RP_PORT}`],
     keySetup: flag('KEY_SETUP'),
     keyWebauthn: flag('KEY_WEBAUTHN'),
+    consentWebauthn: flag('CONSENT_WEBAUTHN'),
     bypassWebauthn: flag('DEMO_BYPASS_WEBAUTHN'),
     rpID: env('WEBAUTHN_RP_ID', 'localhost'),
     origin: env('WEBAUTHN_ORIGIN', merchantOrigin()),
+    googleClientId: env('GOOGLE_CLIENT_ID', ''),
+    googleOrigin: `http://localhost:${RP_PORT}`,
     ...overrides,
   };
 }
@@ -279,5 +291,4 @@ export function startRpServer(port = RP_PORT, overrides: Partial<RpAppConfig> = 
   return { app, server, config };
 }
 
-const isMain = process.argv[1]?.endsWith('rp/server.ts');
-if (isMain) startRpServer();
+if (isMainModule(import.meta.url)) startRpServer();

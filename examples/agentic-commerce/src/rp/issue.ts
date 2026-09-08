@@ -15,6 +15,7 @@
  * Usage: npm run issue [-- --index 95] [--valid-hours 48]
  */
 import path from 'node:path';
+import fs from 'node:fs';
 import {
   DelegationCredentialIssuer,
   type CredentialStatus,
@@ -32,10 +33,11 @@ import {
   makeVcSigningFunction,
   readJson,
   requiredEnv,
-  writeJson,
   type KeyedIdentity,
 } from '../lib/wiring.js';
+import { writeJsonAtomic } from '../lib/atomic-json.js';
 import { parseDigitalLink } from '../lib/product.js';
+import type { DemoConsentLink } from './demo-consent.js';
 
 export const ACTIVE_INDEX_FILE = path.join(VAR_DIR, 'active-index.json');
 export const delegationFile = (index: number): string => path.join(VAR_DIR, `delegation-${index}.json`);
@@ -50,6 +52,7 @@ export interface IssueOptions {
   validHours?: number;
   identity?: KeyedIdentity;
   statusListUrl?: string;
+  demoConsent?: DemoConsentLink;
 }
 
 export async function issueDelegation(options: IssueOptions): Promise<DelegationCredential> {
@@ -108,7 +111,7 @@ export async function issueDelegation(options: IssueOptions): Promise<Delegation
           ],
         },
       },
-      metadata: { tool: 'place_order', event: 'w3c-gs1-ecommerce-workshop-2026' },
+      metadata: { tool: 'place_order', event: 'w3c-gs1-ecommerce-workshop-2026', ...(options.demoConsent ? { demoConsent: options.demoConsent } : {}) },
     },
     { credentialStatus },
   );
@@ -118,8 +121,8 @@ export async function issueDelegation(options: IssueOptions): Promise<Delegation
 export async function issueAndActivate(options: IssueOptions): Promise<{ file: string; vc: DelegationCredential }> {
   const vc = await issueDelegation(options);
   const file = delegationFile(options.index);
-  writeJson(file, vc);
-  writeJson(ACTIVE_INDEX_FILE, { index: options.index, file, issuedAt: new Date().toISOString() });
+  writeJsonAtomic(file, vc);
+  writeJsonAtomic(ACTIVE_INDEX_FILE, { index: options.index, file, issuedAt: new Date().toISOString() });
   return { file, vc };
 }
 
@@ -127,11 +130,27 @@ export function activeIndex(): number {
   return readJson<{ index: number }>(ACTIVE_INDEX_FILE)?.index ?? 94;
 }
 
+export function activeCredentialOrNull(): DelegationCredential | null {
+  const active = readJson<{ index: number }>(ACTIVE_INDEX_FILE);
+  return active ? readJson<DelegationCredential>(delegationFile(active.index)) : null;
+}
+
 export function activeCredential(): DelegationCredential {
-  const index = activeIndex();
-  const vc = readJson<DelegationCredential>(delegationFile(index));
-  if (!vc) throw new Error(`No credential at ${delegationFile(index)} — run: npm run setup`);
+  const vc = activeCredentialOrNull();
+  if (!vc) throw new Error('No active delegation. Place an order and approve the human consent request.');
   return vc;
+}
+
+/** Reset the agent's active grant without deleting prior credentials or audit evidence. */
+export function clearActiveCredential(): void { fs.rmSync(ACTIVE_INDEX_FILE, { force: true }); }
+
+/** Never reuse a status-list index from an earlier grant, including revoked grants. */
+export function nextDelegationIndex(): number {
+  const reserved = Number(env('STATUSLIST_INDEX', '94'));
+  const used = fs.existsSync(VAR_DIR) ? fs.readdirSync(VAR_DIR).flatMap(name => {
+    const match = /^delegation-(\d+)\.json$/.exec(name); return match ? [Number(match[1])] : [];
+  }) : [];
+  return Math.max(reserved, ...used.map(index => index + 1));
 }
 
 const isMain = process.argv[1]?.endsWith('issue.ts');

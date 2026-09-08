@@ -23,8 +23,11 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { generateDidKeyFromBase64, generateRequestProof, type DelegationCredential } from '@kya-os/mcp';
-import { cryptoProvider, loadAgentIdentity, merchantOrigin, type KeyedIdentity } from '../lib/wiring.js';
-import { activeCredential } from '../rp/issue.js';
+import { cryptoProvider, loadAgentIdentity, merchantOrigin, requiredEnv, rpOrigin, SCOPE_PRODUCT_CLASS, type KeyedIdentity } from '../lib/wiring.js';
+import { activeCredentialOrNull } from '../rp/issue.js';
+import { ConsentFlowStore } from '../rp/consent-store.js';
+import { verifyMerchantOrderResponse, type MerchantToolResult } from './authorization.js';
+import { isMainModule } from '../lib/main-module.js';
 import type { DiscoveryDocument } from '../merchant/well-known.js';
 
 export interface DiscoveryDecision {
@@ -69,15 +72,15 @@ function safeAgentDid(): string | null {
 }
 
 export interface AgentOrderOutcome {
-  result: { content?: Array<{ type: string; text?: string }>; isError?: boolean; _meta?: Record<string, unknown> };
+  result: MerchantToolResult;
   elapsedMs: number;
   agentDid: string;
   presented: { product: string; quantity: number; credentialId: string | null; audience: string };
 }
 
 /**
- * One delegated order, over the wire: connect → tools/call place_order with
- * credential + fresh holder proof → disconnect.
+ * One order attempt over MCP with a fresh holder proof. An approved grant and
+ * its first-use resume token are read from persistent storage on every call.
  */
 export async function runAgentOrder(options: {
   product: string;
@@ -85,7 +88,9 @@ export async function runAgentOrder(options: {
   serverUrl?: string;
   audience?: string;
   identity?: KeyedIdentity;
-  credential?: DelegationCredential;
+  /** Explicit null models an agent with no grant; omitted reloads the local store. */
+  credential?: DelegationCredential | null;
+  resumeToken?: string;
   /** Theft simulation: present the REAL credential, sign the proof with a fresh key. */
   forge?: boolean;
 }): Promise<AgentOrderOutcome> {
@@ -96,16 +101,20 @@ export async function runAgentOrder(options: {
     const thiefDid = generateDidKeyFromBase64(stolen.publicKey);
     identity = { did: thiefDid, kid: `${thiefDid}#${thiefDid.replace('did:key:', '')}`, privateKeyBase64: stolen.privateKey, publicKeyBase64: stolen.publicKey };
   }
-  const credential = options.credential ?? activeCredential();
+  const credential = options.credential === undefined ? activeCredentialOrNull() : options.credential;
   const quantity = options.quantity ?? 1;
-  // The audience is the merchant's DID — learned from discovery, or from the
-  // credential's own audience constraint (the grant already names the merchant).
-  const audience = options.audience
-    ?? (typeof credential.credentialSubject.delegation.constraints.audience === 'string'
-      ? credential.credentialSubject.delegation.constraints.audience
-      : (await discover(new URL(serverUrl).origin)).audience);
+  // The demo pins the merchant identity locally. Neither an unverified
+  // credential nor network discovery may replace this trust anchor.
+  const audience = options.audience ?? requiredEnv('MERCHANT_DID');
+  const flow = credential?.id ? new ConsentFlowStore().findByCredential(credential.id) : undefined;
+  const resumeToken = options.resumeToken ?? (flow?.state === 'approved'
+    && flow.bindings.agentDid === identity.did && flow.bindings.audience === audience
+      ? flow.challenge.resumeToken : undefined);
 
-  const args: Record<string, unknown> = { product: options.product, quantity, _kyaos_delegation: credential };
+  const args: Record<string, unknown> = { product: options.product, quantity,
+    ...(credential ? { _kyaos_delegation: credential } : {}),
+    ...(resumeToken ? { resumeToken } : {}),
+  };
   args['_kyaos_proof'] = await generateRequestProof({
     identity: { did: identity.did, kid: identity.kid, privateKey: identity.privateKeyBase64, publicKey: identity.publicKeyBase64 },
     crypto: cryptoProvider,
@@ -119,12 +128,18 @@ export async function runAgentOrder(options: {
   const started = Date.now();
   await client.connect(transport);
   try {
-    const result = await client.callTool({ name: 'place_order', arguments: args });
+    const result = await client.callTool({ name: 'place_order', arguments: args }) as MerchantToolResult;
+    const consentOrigin = new URL(rpOrigin());
+    if (consentOrigin.hostname === 'localhost') consentOrigin.hostname = '127.0.0.1';
+    await verifyMerchantOrderResponse(result, {
+      args, merchantDid: audience, agentDid: identity.did,
+      consentOrigin: consentOrigin.origin, scope: SCOPE_PRODUCT_CLASS,
+    });
     return {
       result: result as AgentOrderOutcome['result'],
       elapsedMs: Date.now() - started,
       agentDid: identity.did,
-      presented: { product: options.product, quantity, credentialId: credential.id ?? null, audience },
+      presented: { product: options.product, quantity, credentialId: credential?.id ?? null, audience },
     };
   } finally {
     await client.close();
@@ -144,8 +159,7 @@ export async function browseCatalog(serverUrl = `${merchantOrigin()}/mcp`): Prom
   }
 }
 
-const isMain = process.argv[1]?.endsWith('agent/agent.ts');
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const [, , cmd = 'order', ...rest] = process.argv;
   const arg = (name: string, fallback?: string) => { const i = rest.indexOf(`--${name}`); return i > -1 ? rest[i + 1] : fallback; };
   const run = async () => {
@@ -163,8 +177,11 @@ if (isMain) {
     const text = outcome.result.content?.[0]?.text ?? '';
     let body: Record<string, unknown> = {};
     try { body = JSON.parse(text); } catch { body = { raw: text }; }
-    console.log(JSON.stringify({ agent: outcome.agentDid, tool: 'place_order', ...outcome.presented, elapsedMs: outcome.elapsedMs, verdict: outcome.result.isError ? 'DENIED' : 'ALLOWED', ...body }, null, 2));
-    process.exit(outcome.result.isError ? 1 : 0);
+    const needsConsent = body['error'] === 'needs_authorization';
+    const denied = Boolean(outcome.result.isError || body['error']);
+    const verdict = needsConsent ? 'NEEDS_AUTHORIZATION' : denied ? 'DENIED' : 'ALLOWED';
+    console.log(JSON.stringify({ agent: outcome.agentDid, tool: 'place_order', ...outcome.presented, elapsedMs: outcome.elapsedMs, verdict, ...body }, null, 2));
+    process.exit(denied && !needsConsent ? 1 : 0);
   };
   run().catch((err) => { console.error('agent error:', err instanceof Error ? err.message : err); process.exit(2); });
 }

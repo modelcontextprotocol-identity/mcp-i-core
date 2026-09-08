@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KYA-OS · Agent-Actionable — merchant edge, verifier view</title>
+<title>KYA-OS · Human consent to agent action</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0c0f'/%3E%3Crect x='2' y='2' width='28' height='28' fill='none' stroke='%2334e07a' stroke-width='3'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='19' font-weight='900' fill='%2334e07a' text-anchor='middle'%3EK%3C/text%3E%3C/svg%3E">
 <style>
   :root {
@@ -60,6 +60,11 @@
 
   .cred { border: 1px solid var(--line-hot); background: var(--panel-2); padding: 12px 14px; position: relative; margin-top: 6px; }
   .cred::before { content: "W3C VERIFIABLE CREDENTIAL · DELEGATION"; position: absolute; top: -8px; left: 10px; background: var(--panel); padding: 0 8px; font-size: 9.5px; letter-spacing: 0.2em; color: var(--dim); }
+  .human-grant { padding: 12px 14px; margin-bottom: 20px; border-left: 3px solid var(--ok); background: var(--panel-2); overflow-wrap: anywhere; }
+  .human-grant[hidden] { display: none; }
+  .human-grant strong { display: block; color: var(--bright); font-size: 19px; margin: 5px 0; }
+  .human-grant .relationship { color: var(--ok); font-size: 11px; letter-spacing: .03em; }
+  .human-grant .detail { color: var(--text); font-size: 12px; margin-top: 7px; }
   .cred-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
   .cred-row .k { color: var(--dim); white-space: nowrap; }
   .cred-row .v { text-align: right; overflow-wrap: anywhere; }
@@ -73,13 +78,16 @@
   @keyframes pop { 0% { transform: scale(1); } 30% { transform: scale(1.28); filter: brightness(1.7); } 100% { transform: scale(1); } }
 
   /* gate rail */
-  .gates { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; padding: 14px; border-bottom: 1px solid var(--line); }
+  .gates { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; padding: 14px; border-bottom: 1px solid var(--line); }
   @media (max-width: 640px) { .gates { grid-template-columns: repeat(3, 1fr); } }
   .gate { border: 1px solid var(--line); background: var(--panel-2); padding: 9px 6px; text-align: center; position: relative; transition: border-color 0.2s, background 0.2s; }
   .gate .g-dot { width: 9px; height: 9px; border-radius: 50%; margin: 0 auto 7px; background: var(--dim); transition: background 0.2s, box-shadow 0.2s; }
   .gate .g-name { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
   .gate.check { border-color: var(--warn); }
   .gate.check .g-dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); animation: pulse 0.7s ease-in-out infinite; }
+  .gate.pending { border-color: var(--warn); }
+  .gate.pending .g-dot { background: var(--warn); }
+  .gate.pending .g-name { color: var(--warn); }
   .gate.pass { border-color: rgba(52,224,122,0.4); }
   .gate.pass .g-dot { background: var(--ok); box-shadow: 0 0 10px rgba(52,224,122,0.6); }
   .gate.pass .g-name { color: var(--text); }
@@ -98,6 +106,16 @@
   .seal.blocked { color: var(--warn); border-color: var(--warn); transform: rotate(-3deg); box-shadow: 0 0 40px rgba(255,176,32,0.22), inset 0 0 26px rgba(255,176,32,0.08); animation: slam 0.28s cubic-bezier(0.2,1.6,0.35,1); }
   .seal.wait { color: var(--warn); border-color: var(--warn); animation: breathe 1.1s ease-in-out infinite; }
   .seal.denied { color: var(--kill); border-color: var(--kill-deep); transform: rotate(-3deg); box-shadow: 0 0 40px rgba(224,27,60,0.28), inset 0 0 26px rgba(224,27,60,0.09); animation: slam 0.28s cubic-bezier(0.2,1.6,0.35,1); }
+  .seal.consent, .seal.approved { font-size: clamp(23px, 3.6vw, 42px); letter-spacing: .08em; white-space: normal; text-align: center; }
+  .seal.consent { color: var(--warn); border-color: var(--warn); }
+  .seal.approved { color: var(--ok); border-color: var(--ok); }
+  .authorization { margin: 0 14px 14px; padding: 20px; background: #f4f0e6; color: #181916; border: 2px solid #d9ccaa; }
+  .authorization[hidden] { display: none; }
+  .authorization h2 { font-size: 20px; line-height: 1.3; margin-bottom: 10px; }
+  .authorization p { font-size: 14px; margin-bottom: 14px; overflow-wrap: anywhere; }
+  .authorization a { display: block; color: #fffdf6; background: #181916; padding: 14px 18px; font: 700 19px var(--mono); text-align: center; text-decoration: none; }
+  .authorization a:hover, .authorization a:focus-visible { background: #343b30; outline: 3px solid var(--warn); outline-offset: 3px; }
+  .authorization .url { display: block; margin-top: 12px; font-size: 11px; color: #464941; overflow-wrap: anywhere; }
   @keyframes slam { 0% { transform: scale(2.1) rotate(-14deg); opacity: 0; } 100% { transform: scale(1) rotate(-4deg); opacity: 1; } }
   @keyframes breathe { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
   .verdict-cap { padding: 0 14px 12px; text-align: center; }
@@ -281,8 +299,9 @@
   <div class="live" id="live-rp"><span class="dot"></span><span>responsible party</span></div>
 </header>
 <div class="subhead">
-  The agent is a <b>separate MCP client</b> (Claude Desktop through a gateway, or the simulated-agent buttons). This screen is the <b>merchant's view</b>:
-  every <code>place_order</code> it verifies lights up here. The Responsible Party is the shopper's own hub, a different process on a different port; the merchant trusts its <b>signature</b>, not this page.
+  <b>Human consent → scoped grant → order → revocation.</b>
+  Claude or the scripted MCP client requests two risotto, CHF 39.80. The human grants authority up to CHF 50.00 for one GS1 product class.
+  Every <code>place_order</code> appears here as the merchant verifies it.
 </div>
 
 <div class="grid">
@@ -306,12 +325,19 @@
     <section class="panel">
       <div class="panel-head"><span>The grant</span><span class="pill" id="grant-pill">—</span></div>
       <div class="panel-body">
+        <div class="human-grant" id="human-grant" hidden>
+          <div class="relationship">Human → passkey → signed consent → agent</div>
+          <strong id="c-human"></strong>
+          <div class="muted" id="c-human-source"></div>
+          <div class="detail" id="c-human-authentication"></div>
+          <div class="muted" id="c-human-consent"></div>
+        </div>
         <div class="cred">
           <div class="cred-row"><span class="k">responsible party</span><span class="v" id="c-rp">—</span></div>
           <div class="cred-row"><span class="k">agent (subject)</span><span class="v" id="c-agent">—</span></div>
           <div class="cred-row"><span class="k">audience</span><span class="v" id="c-aud">—</span></div>
           <div class="cred-row" style="display:block"><span class="k">scope · GS1 Digital Link product class</span><span class="scope-uri" id="c-scope">—</span><span class="muted" id="c-matcher"></span></div>
-          <div class="cred-row"><span class="k">cap</span><span class="v cap" id="c-cap">—</span></div>
+          <div class="cred-row"><span class="k">MaxAmount</span><span class="v cap" id="c-cap">—</span></div>
           <div class="cred-row"><span class="k">valid until</span><span class="v" id="c-until">—</span></div>
           <div class="cred-row"><span class="k">status bit</span><span class="v" id="bit">—</span></div>
           <div class="cred-row"><span class="k">list index</span><span class="v" id="c-index">—</span></div>
@@ -356,16 +382,22 @@
         <div class="verdict-code" id="verdict-code"></div>
         <div class="verdict-tagline">The shipped verifier decides · nothing mocked · <span class="latency" id="latency"></span></div>
       </div>
-      <div class="controls-head">Simulated agent · use when Claude Desktop isn't driving</div>
+      <div class="authorization" id="authorization-panel" hidden aria-live="polite">
+        <h2>The human decides what the agent may do.</h2>
+        <p id="authorization-detail"></p>
+        <a id="authorization-link" target="_blank" rel="noopener noreferrer">Open human consent</a>
+        <span class="url" id="authorization-url"></span>
+      </div>
+      <div class="controls-head">Live MCP client · same tools as Claude Desktop</div>
       <div class="controls">
         <button class="act" id="btn-discover">Discover<span class="key">[0]</span></button>
         <button class="act primary" id="btn-order">Order 2 × risotto<span class="key">[1] · CHF 39.80</span></button>
         <button class="act" id="btn-wrong">Wrong product<span class="key">[2] · olive oil</span></button>
         <button class="act" id="btn-overcap">Over cap<span class="key">[3] · 5 × = CHF 99.50</span></button>
         <button class="act" id="btn-steal">Stolen credential<span class="key">[5] · wrong key</span></button>
-        <button class="act" id="btn-retry">Try again<span class="key">[4]</span></button>
+        <button class="act" id="btn-retry">Retry same order<span class="key">[4] · 2 × risotto</span></button>
         <button class="act" id="btn-verify">Python re-verify<span class="key">[V]</span></button>
-        <button class="act" id="btn-reset">Reset · new grant<span class="key">[R]</span></button>
+        <button class="act" id="btn-reset">Reset · clear grant<span class="key">[R] · consent required</span></button>
       </div>
     </section>
 
@@ -450,11 +482,11 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const seal = $('seal'), log = $('log'), rpLog = $('rp-log');
-  let busy = false, lastRevoked, stateCache = {}, rpCache = {}, rpOrigin = null;
+  let busy = false, lastRevoked, stateCache = {}, rpCache = {}, rpOrigin = null, pendingAuthorization = null;
 
   const GATES = [
     ['signature', 'Signature · window · audience'], ['revocation', 'Revocation'], ['holder', 'Holder key'],
-    ['product', 'Product class'], ['cap', 'Spend cap'], ['receipt', 'Signed receipt'],
+    ['product', 'Product class'], ['cap', 'Spend cap'], ['consent', 'Human consent'], ['receipt', 'Signed receipt'],
   ];
   const gateEls = {};
   for (const [key, name] of GATES) {
@@ -475,7 +507,7 @@
 
   const now = () => new Date().toTimeString().slice(0, 8);
   const short = (s, n = 30) => (typeof s === 'string' && s.length > n) ? s.slice(0, n) + '…' : (s ?? '—');
-  const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const dl = (uri) => {
     const m = /^(https:\/\/[^/]+\/01\/)(\d+)(.*)$/.exec(uri || '');
     return m ? `${esc(m[1])}<span class="gtin">${esc(m[2])}</span>${esc(m[3])}` : esc(uri);
@@ -495,7 +527,7 @@
     log.prepend(el);
   }
 
-  const SEAL_TEXT = { ok: 'AUTHORIZED', kill: 'REVOKED', blocked: 'REFUSED', denied: 'DENIED', wait: 'VERIFYING', ready: 'READY' };
+  const SEAL_TEXT = { ok: 'AUTHORIZED', kill: 'REVOKED', blocked: 'REFUSED', denied: 'DENIED', wait: 'VERIFYING', ready: 'READY', consent: 'CONSENT NEEDED', approved: 'GRANT APPROVED' };
   function setSeal(state, note = '') {
     seal.className = 'seal ' + (state === 'ready' ? 'ok' : state);
     seal.textContent = SEAL_TEXT[state] ?? 'VERIFYING';
@@ -513,6 +545,77 @@
   async function api(path, opts, base = '') {
     const res = await fetch(base + path, { method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: opts ? JSON.stringify(opts) : undefined });
     return res.json();
+  }
+
+  function hideAuthorization() {
+    pendingAuthorization = null;
+    $('authorization-panel').hidden = true;
+    $('authorization-link').removeAttribute('href');
+    $('authorization-url').textContent = '';
+  }
+
+  function showAuthorization(challenge) {
+    hideAuthorization();
+    try {
+      const url = new URL(challenge.authorizationUrl);
+      const expected = new URL(rpOrigin);
+      const loopback = (host) => host === 'localhost' || host === '127.0.0.1';
+      const sameHub = url.origin === expected.origin || (loopback(url.hostname) && loopback(expected.hostname) && url.port === expected.port && url.protocol === expected.protocol);
+      if (!sameHub || url.pathname !== '/consent' || url.username || url.password || url.hash) throw new Error('URL is outside the configured Responsible Party hub');
+      if (!Number.isFinite(challenge.expiresAt) || challenge.expiresAt <= Date.now() / 1000) {
+        setSeal('denied'); setCode('AUTHORIZATION_EXPIRED', 'red');
+        line('The consent request expired. Request the order again to begin a new human grant.', 'warn-line');
+        return;
+      }
+      pendingAuthorization = challenge;
+      $('authorization-link').href = url.href;
+      $('authorization-detail').textContent = `place_order · ${(challenge.scopes || []).join(', ')} · expires ${new Date(challenge.expiresAt * 1000).toLocaleTimeString()}`;
+      $('authorization-url').textContent = url.href;
+      $('authorization-panel').hidden = false;
+      setSeal('consent'); setCode('NEEDS_AUTHORIZATION · NO ORDER PLACED', 'amber');
+      line('Human consent required. Open the authorization URL, review the scope and cap, then approve or deny the grant.', 'warn-line', true);
+    } catch (error) {
+      setSeal('denied'); setCode('AUTHORIZATION_URL_REJECTED', 'red');
+      line(`Consent URL refused: ${esc(error.message)}`, 'kill-line');
+    }
+  }
+
+  function renderNoGrant() {
+    clearHumanGrant();
+    for (const id of ['c-rp', 'c-agent', 'c-aud', 'c-scope', 'c-cap', 'c-until', 'c-index']) $(id).textContent = '—';
+    $('c-matcher').textContent = 'The Responsible Party issues a grant only after human approval.';
+    $('bit').textContent = 'no credential issued';
+    $('bit').className = 'v';
+    $('grant-pill').textContent = 'no grant';
+    $('grant-pill').className = 'pill warn';
+    document.body.classList.remove('revoked');
+    lastRevoked = undefined;
+  }
+
+  function clearHumanGrant() {
+    $('human-grant').hidden = true;
+    for (const id of ['c-human', 'c-human-source', 'c-human-authentication', 'c-human-consent']) $(id).textContent = '';
+  }
+
+  function renderHumanGrant(metadata) {
+    clearHumanGrant();
+    const consent = metadata && metadata.demoConsent;
+    const human = consent && consent.human;
+    const authentication = consent && consent.authentication;
+    if (!human || human.provider !== 'google' || human.identitySource !== 'identity-provider'
+      || typeof human.accountRef !== 'string' || !human.accountRef
+      || !authentication || authentication.method !== 'webauthn'
+      || typeof authentication.credentialRef !== 'string'
+      || typeof consent.consentRef !== 'string') return;
+    // All profile values are text, including provider-supplied display names.
+    // The signed credential supplies this relationship; labels are never identity.
+    $('c-human').textContent = human.displayName || 'Signed-in Google account';
+    $('c-human-source').textContent = 'Google account · provider-supplied profile name';
+    $('c-human-authentication').textContent = authentication.userVerified
+      ? 'Passkey confirmed · user verification passed'
+      : 'Passkey confirmed';
+    $('c-human-consent').textContent = `Signed consent ${short(consent.consentRef, 38)}`;
+    $('human-grant').hidden = false;
   }
 
   // ── state ────────────────────────────────────────────────────────────────────
@@ -535,8 +638,9 @@
   }
 
   function renderGrant(vc, revoked, listMeta) {
-    if (!vc) return;
+    if (!vc) { renderNoGrant(); return; }
     const d = vc.credentialSubject.delegation;
+    renderHumanGrant(d.metadata);
     const scope = (d.constraints.crisp && d.constraints.crisp.scopes || [])[0];
     const c = (scope && scope.constraints) || {};
     $('c-rp').textContent = typeof vc.issuer === 'string' ? vc.issuer : vc.issuer.id;
@@ -581,7 +685,16 @@
       const r = await api('/api/rp/state', undefined, rpOrigin);
       rpCache = r;
       const g = await api('/api/rp/delegation', undefined, rpOrigin);
-      if (g && g.credential) renderGrant(g.credential, r.revoked, r.statusList);
+      renderGrant(g && g.credential, r.revoked, r.statusList);
+      if (g.credential && $('verdict-code').textContent === 'NO GRANT · HUMAN CONSENT REQUIRED') {
+        if (r.revoked) { setSeal('kill'); setCode('GRANT REVOKED', 'red'); }
+        else setCode('GRANT ACTIVE · READY TO ORDER', 'amber');
+      }
+      const challenge = stateCache.authorizationChallenge;
+      if (!pendingAuthorization && !g.credential && challenge && challenge.resumeToken) {
+        const status = await api('/consent/status?resume_token=' + encodeURIComponent(challenge.resumeToken), undefined, rpOrigin);
+        if (status.state === 'pending') showAuthorization(challenge);
+      }
       $('rp-pill').textContent = `list v${r.statusList.version} · index #${r.activeIndex}`;
       $('rp-pill').className = 'pill';
       const kn = $('kill-note');
@@ -640,20 +753,27 @@
         setSeal('ready'); setCode('');
       } else if (e.type === 'request') {
         setGates('check'); setSeal('wait'); setCode(''); $('latency').textContent = '';
-        line(`agent → place_order { product: <code>${esc(e.product)}</code>, quantity: ${esc(e.quantity)} } + delegation + holder proof — verifying`, 'src-line');
+        line(`agent → place_order { product: <code>${esc(e.product)}</code>, quantity: ${esc(e.quantity)} } · verifying authority`, 'src-line');
       } else if (e.type === 'verdict') {
         applyChecks(e.checks || {});
         $('latency').textContent = `${e.elapsedMs} ms end to end`;
         const b = e.body || {};
-        if (e.verdict === 'allowed') {
+        if (b.error === 'needs_authorization' || e.verdict === 'needs_authorization') {
+          showAuthorization(b);
+        } else if (e.verdict === 'allowed') {
+          hideAuthorization();
           setSeal('ok'); setCode('');
           line(`✅ order ${esc(b.orderId)} — ${esc(b.order.quantity)} × ${esc(b.order.name)} = <b>${esc(b.order.total)}</b>`, 'ok-line', true);
-          line(`verified before the sale: signature ✓ · window+audience ✓ · revocation ✓ (list fetched now${e.statusList ? ', ' + esc(e.statusList.elapsedMs) + ' ms' : ''}) · holder key ✓ · product class ✓ · cap ✓ · receipt signed`, 'dim-line');
+          line(`verified before the sale: signature ✓ · window+audience ✓ · revocation ✓ (list fetched now${e.statusList ? ', ' + esc(e.statusList.elapsedMs) + ' ms' : ''}) · holder key ✓ · product class ✓ · cap ✓ · human consent ✓ · receipt signed`, 'dim-line');
           showReceipt(b, e.receipt, e.statusList);
         } else if (e.code === 'holder_binding_failed') {
           setSeal('denied'); setCode('HOLDER_BINDING_FAILED', 'red');
           line(`⛔ holder_binding_failed: ${esc(e.reason)}`, 'kill-line', true);
-          line('a copied credential without the agent\'s key is paper — refused BEFORE the handler. Subject-bound, not bearer (spec §11.8).', 'dim-line');
+          line('A fresh proof must bind the agent\'s key, this request, and this merchant. The holder check failed before consent or ordering.', 'dim-line');
+        } else if ((e.code || '').startsWith('CONSENT_')) {
+          setSeal('denied'); setCode(e.code, 'red');
+          line(`⛔ ${esc(e.code)}: ${esc(e.reason)}`, 'kill-line', true);
+          line('The approved grant or its first-use token could not be accepted. Credential and holder checks retain their own results.', 'dim-line');
         } else if (/revoked/i.test(e.reason || '')) {
           setSeal('denied'); setCode('CREDENTIAL_REVOKED · nothing sold', 'red');
           line(`⛔ ${esc(e.code)}: ${esc(e.reason)}`, 'kill-line', true);
@@ -670,15 +790,16 @@
         } else if (e.code === 'SPEND_CAP_EXCEEDED') {
           setSeal('blocked'); setCode('SPEND_CAP_EXCEEDED', 'amber');
           line(`⛔ ${esc(b.message)}`, 'warn-line', true);
-          line('the cap lives in the signed credential; the merchant enforces it. The trust layer never touches the payment.', 'dim-line');
+          line('MaxAmount lives in the signed credential; the merchant enforces the CHF cap before accepting the order.', 'dim-line');
         } else {
           setSeal('denied'); setCode(e.code || 'DELEGATION_INVALID', 'red');
           line(`⛔ ${esc(e.code)}: ${esc(e.reason || b.message)}`, 'kill-line', true);
         }
         refresh();
       } else if (e.type === 'reset') {
-        line(`fresh grant issued by the Responsible Party at index #${esc(e.index)} — same scope, same cap, clear bit`, 'ok-line');
-        setSeal('ready'); setGates(''); setCode(''); $('latency').textContent = '';
+        hideAuthorization(); renderNoGrant();
+        line('Agent grant cleared. The next order requires a fresh human consent decision.', 'warn-line');
+        setSeal('ready'); setGates(''); setCode('NO GRANT · HUMAN CONSENT REQUIRED', 'amber'); $('latency').textContent = '';
         refresh();
       } else if (e.type === 'crosscheck') {
         const el = $('crosscheck');
@@ -707,12 +828,26 @@
     es.onerror = () => $('live-rp').classList.remove('on');
     es.onmessage = (ev) => {
       let e; try { e = JSON.parse(ev.data); } catch { return; }
-      if (e.type === 'revoke_start') {
+      if (e.type === 'consent.approved' || e.type === 'consent.denied') {
+        const token = e.resumeToken || e.sessionId;
+        if (pendingAuthorization && token && token !== pendingAuthorization.resumeToken) return;
+        hideAuthorization();
+        if (e.type === 'consent.approved') {
+          setSeal('approved'); setCode('HUMAN APPROVED · RETRY THE SAME ORDER', 'amber');
+          line(`Human approved. Responsible Party issued grant #${esc(e.index)}. Retry the same order.`, 'ok-line', true);
+          line(`consent approved · grant #${esc(e.index)}`, 'ok-line', false, rpLog);
+        } else {
+          setSeal('denied'); setCode('CONSENT_DENIED', 'red');
+          line('Human denied the grant. No credential issued. No order placed.', 'kill-line', true);
+          line('consent denied · no credential issued', 'kill-line', false, rpLog);
+        }
+        refresh();
+      } else if (e.type === 'revoke_start') {
         sep('revocation'); setGates(''); setSeal('wait', 'revoking'); setCode('');
         line(`Responsible Party → revoke grant #${esc(e.index)}`, 'warn-line', false, rpLog);
         line(`Responsible Party → revoking grant #${esc(e.index)}…`, 'warn-line');
       } else if (e.type === 'revoke_phase') {
-        line(`[+${String(e.elapsedMs).padStart(4)} ms] ${esc(e.phase)} — ${esc(e.detail)}`, 'warn-line', false, rpLog);
+        line(`[+${esc(String(e.elapsedMs).padStart(4))} ms] ${esc(e.phase)} — ${esc(e.detail)}`, 'warn-line', false, rpLog);
       } else if (e.type === 'revoke_done') {
         line(`⚡ status list v${esc(e.version)} published · bit ${esc(e.index)} = 1 · ${esc(e.totalMs)} ms`, 'kill-line', true, rpLog);
         line(`⚡ Responsible Party published status list v${esc(e.version)} with bit ${esc(e.index)} set (${esc(e.totalMs)} ms). Every verifier that fetches the list now reads the revocation.`, 'kill-line', true);
@@ -732,6 +867,7 @@
 
   // ── audit trail: the finale. Rendered from the act responses (large), logged via SSE. ──
   const D = (d, n = 16) => (typeof d === 'string' ? d.replace(/^sha256:/, '').slice(0, n) : '—');
+  const digestHtml = (d, n) => esc(D(d, n));
   const ts = (ms) => (ms ? new Date(ms).toISOString().slice(11, 19) + 'Z' : '—');
   let auditReport = null, auditTamper = null;
 
@@ -764,8 +900,8 @@
     const rows = r.entries.map((e) => {
       const cls = ['o-' + e.outcome, e.seq === forgedSeq ? 'forged' : '', e.seq === breakSeq ? 'break' : '', e.anchored ? '' : 'unanchored'].filter(Boolean).join(' ');
       const out = e.seq === forgedSeq ? `<s>${esc(tamper.target.before)}</s>${esc(tamper.target.after)}` : esc(e.outcome);
-      const chain = e.seq === breakSeq ? `⛓ BREAK · names ${D(e.previousEntryDigest, 6)}, not the edit` : (e.previousEntryDigest ? `⛓ ${D(e.previousEntryDigest, 8)}` : 'genesis');
-      return `<tr class="${cls}" id="ledger-row-${esc(e.seq)}"><td class="seq">${esc(e.seq)}</td><td class="ev">${esc(e.eventType)}${e.tool ? ' <span class="muted">' + esc(e.tool) + '</span>' : ''}</td><td class="out">${out}</td><td class="reason"><span title="${esc(e.reason || '')}">${esc(e.reason || '')}</span></td><td class="digest">${D(e.entryDigest, 10)}</td><td class="chain">${chain}</td></tr>`;
+      const chain = e.seq === breakSeq ? `⛓ BREAK · names ${digestHtml(e.previousEntryDigest, 6)}, not the edit` : (e.previousEntryDigest ? `⛓ ${digestHtml(e.previousEntryDigest, 8)}` : 'genesis');
+      return `<tr class="${esc(cls)}" id="ledger-row-${esc(e.seq)}"><td class="seq">${esc(e.seq)}</td><td class="ev">${esc(e.eventType)}${e.tool ? ' <span class="muted">' + esc(e.tool) + '</span>' : ''}</td><td class="out">${out}</td><td class="reason"><span title="${esc(e.reason || '')}">${esc(e.reason || '')}</span></td><td class="digest">${digestHtml(e.entryDigest, 10)}</td><td class="chain">${chain}</td></tr>`;
     }).join('');
     $('audit-table').innerHTML = `<table class="ledger"><thead><tr><th>#</th><th>event · ${esc(r.entries[0] ? r.entries[0].at.slice(0, 10) : '')}</th><th>outcome</th><th>reason</th><th>entry digest</th><th>previous (chain)</th></tr></thead><tbody>${rows}</tbody></table>`;
     const box = $('audit-table');
@@ -780,10 +916,10 @@
     const dirty = (row) => { if (forgedIdx < 0 || row.leafIndex !== null) return false; const m = /^\[(\d+)\.\.(\d+)\]$/.exec(row.label); return !!m && forgedIdx >= Number(m[1]) && forgedIdx <= Number(m[2]); };
     const root = r.tree[0];
     $('audit-tree-root').className = 'tree-root' + (tamper ? ' bad' : '');
-    $('audit-tree-root').innerHTML = root ? `ROOT       <span class="h">${D(root.hash, 24)}</span>${tamper ? `   <span class="re">≠ recomputed after the edit  ${D(tamper.tamperedRoot, 16)}</span>` : '   ← signed · witnessed'}` : '';
+    $('audit-tree-root').innerHTML = root ? `ROOT       <span class="h">${digestHtml(root.hash, 24)}</span>${tamper ? `   <span class="re">≠ recomputed after the edit  ${digestHtml(tamper.tamperedRoot, 16)}</span>` : '   ← signed · witnessed'}` : '';
     $('audit-tree').innerHTML = r.tree.slice(1).map((row) => {
       const cls = row.leafIndex !== null ? 'leaf' + (row.leafIndex === forgedIdx ? ' forged' : '') : 'node' + (dirty(row) ? ' dirty' : '');
-      return `<span class="row ${cls}" ${row.leafIndex === forgedIdx ? 'id="tree-forged"' : ''}>${esc(row.prefix)}${esc(row.label.padEnd(10))} <span class="h">${D(row.hash, 20)}</span>${row.leafIndex === forgedIdx && row.leafIndex !== null ? '  ✗ edited — every ancestor above it changes' : ''}</span>`;
+      return `<span class="row ${cls}" ${row.leafIndex === forgedIdx ? 'id="tree-forged"' : ''}>${esc(row.prefix)}${esc(row.label.padEnd(10))} <span class="h">${digestHtml(row.hash, 20)}</span>${row.leafIndex === forgedIdx && row.leafIndex !== null ? '  ✗ edited — every ancestor above it changes' : ''}</span>`;
     }).join('');
     const forgedEl = $('tree-forged');
     if (forgedEl) forgedEl.scrollIntoView({ block: 'center' }); else $('audit-tree').scrollTop = 0;
@@ -802,7 +938,7 @@
     $('audit-cp').innerHTML = `
       <dt>root</dt><dd class="digest">${esc(cp.rootDigest || '—')}</dd>
       <dt>covers</dt><dd class="hot">${esc(cp.treeSize || '—')} entries · seq 0…${esc(cp.treeSize ? cp.treeSize - 1 : '—')} · signed ${esc(ts(cp.createdAt))} · EdDSA · merchant key</dd>
-      <dt>witness</dt><dd class="${w ? 'ok' : 'amber'}">${w ? `${esc(w.observer.did)} · ${esc(ts(w.observedAt))} · receipt ${D(w.observationDigest, 10)} ✓` : (r.witnessError ? 'refused: ' + esc(r.witnessError) : 'none')}</dd>
+      <dt>witness</dt><dd class="${w ? 'ok' : 'amber'}">${w ? `${esc(w.observer.did)} · ${esc(ts(w.observedAt))} · receipt ${digestHtml(w.observationDigest, 10)} ✓` : (r.witnessError ? 'refused: ' + esc(r.witnessError) : 'none')}</dd>
       <dt>assurance</dt><dd class="amber">${esc(r.profile.advertised)} advertised (in-memory journal; the SDK refuses more) · durable journal → AAP-3 · + witness → AAP-4</dd>`;
     $('audit-cp-note').textContent = w ? 'RP countersigned ✓' : '';
     $('audit-cp-note').className = 'ok-line';
@@ -825,7 +961,7 @@
       <div class="tamper-banner">An <b>insider with the merchant's signing key</b> rewrites entry #${esc(t.target.seq)} (${esc(t.target.eventType)}${t.target.reason ? ', ' + esc(t.target.reason) : ''}) from <b>${esc(t.target.before)}</b> to <b>${esc(t.target.after)}</b>, recomputes its digests and re-signs the receipt — the signature <span class="ok">verifies</span>. Still caught, three ways:</div>
       <dl class="kv tight" style="margin-top:6px">
         <dt>chain</dt><dd class="kill-line">#${esc(t.chainBreaksAt ?? '—')} still names the honest digest as its predecessor → PREDECESSOR_MISMATCH</dd>
-        <dt>root</dt><dd class="kill-line">anchored ${D(t.anchoredRoot, 12)} ≠ recomputed ${D(t.tamperedRoot, 12)} → CHECKPOINT_ROOT_MISMATCH · the edited leaf's path no longer reaches the signed root → MERKLE_PROOF_INVALID</dd>
+        <dt>root</dt><dd class="kill-line">anchored ${digestHtml(t.anchoredRoot, 12)} ≠ recomputed ${digestHtml(t.tamperedRoot, 12)} → CHECKPOINT_ROOT_MISMATCH · the edited leaf's path no longer reaches the signed root → MERKLE_PROOF_INVALID</dd>
         <dt>witness</dt><dd class="${t.witnessStillBindsAnchoredRoot ? 'ok' : 'amber'}">${t.witnessStillBindsAnchoredRoot ? 'the Responsible Party\'s receipt binds the honest root — re-signing the checkpoint would contradict a third party' : 'no witness receipt in this run'}</dd>
       </dl>`;
     const hv = dims(t.reports.honest);
@@ -840,7 +976,7 @@
     const v = (rep) => Object.values(rep).filter((x) => x && typeof x === 'object' && 'verdict' in x);
     const bad = v(e.reports.tampered).filter((x) => x.verdict === 'invalid').length;
     $('audit-export').innerHTML = `
-      <div>📦 <b style="color:var(--text)">var/audit/</b> ${e.components.map((c) => esc(c.path) + ' ' + esc(c.size) + ' B').join(' · ')} · policy.json · keys.json · manifest ${D(e.manifestDigest, 12)} signed</div>
+      <div>📦 <b style="color:var(--text)">var/audit/bundle.json</b> · bundle.tampered.json · ${e.components.map((c) => esc(c.path) + ' ' + esc(c.size) + ' B').join(' · ')} · policy.json · keys.json · manifest ${digestHtml(e.manifestDigest, 12)} signed</div>
       <div style="margin-top:3px" title="${esc(e.command.honest)}"><code style="display:inline">npm run verify:ledger</code> → <span class="ok-line">exit 0</span> &nbsp; <code style="display:inline">npm run verify:ledger:tampered</code> → <span class="kill-line">exit 1 · ${esc(bad)} invalid</span> &nbsp; <code style="display:inline">npm run verify:ledger:py</code> → stdlib Python, no SDK · <a href="/api/audit/bundle" download>download</a></div>`;
     if (!auditTamper) { $('audit-verdicts').innerHTML = verdictStrip(e.reports.honest, 'bundle.json'); $('audit-verdict-note').textContent = 'written to var/audit · trust from policy.json + keys.json, never from the bundle'; $('audit-verdict-note').className = 'ok-line'; }
   }
@@ -923,7 +1059,7 @@
   $('btn-wrong').onclick    = () => trigger('/api/act/order', { product: 'olive-oil', quantity: 1 });
   $('btn-overcap').onclick  = () => trigger('/api/act/order', { product: 'risotto', quantity: 5 });
   $('btn-steal').onclick    = () => trigger('/api/act/order', { product: 'risotto', quantity: 1, forge: true });
-  $('btn-retry').onclick    = () => trigger('/api/act/order', { product: 'risotto', quantity: 1 });
+  $('btn-retry').onclick    = () => trigger('/api/act/order', { product: 'risotto', quantity: 2 });
   $('btn-verify').onclick   = () => trigger('/api/act/verify-receipt', {});
   $('btn-revoke').onclick   = revokeAction;
   $('btn-reset').onclick    = actReset;
@@ -953,8 +1089,8 @@
     if (e.key === 'r' || e.key === 'R') $('btn-reset').click();
   });
 
-  line('merchant edge · verifier view ready — the agent is a separate MCP client; the Responsible Party is a separate hub', 'dim-line');
-  setGates(''); connectMerchant();
+  line('Request an order to begin. The human decides whether the Responsible Party may issue the scoped grant.', 'dim-line');
+  renderNoGrant(); hideAuthorization(); setCode('NO GRANT · HUMAN CONSENT REQUIRED', 'amber'); setGates(''); connectMerchant();
   refresh().then(() => { connectRp(); });
 })();
 </script>

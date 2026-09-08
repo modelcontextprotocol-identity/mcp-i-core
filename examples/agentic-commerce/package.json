@@ -22,14 +22,22 @@
     "revoke": "tsx src/rp/revoke.ts",
     "verify:receipt": "python3 scripts/verify-receipt.py",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo:e2e": "vitest run tests/e2e.test.ts",
+    "demo:scripted": "tsx scripts/demo-scripted.ts",
+    "demo:restart": "tsx scripts/restart.ts",
+    "demo:capture": "python3 scripts/screenshot-run.py docs/screenshots/consent --presenter --record-video --duration 90",
+    "test:webauthn:browser": "python3 scripts/test-consent-webauthn.py --outdir docs/screenshots/webauthn",
+    "test:google:browser": "python3 scripts/test-consent-webauthn.py --google-identity --outdir docs/screenshots/google-identity"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
+    "@kya-os/consent": "0.1.48",
     "@kya-os/mcp": "^1.15.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@simplewebauthn/server": "^13.3.2",
     "dotenv": "^17.4.2",
+    "google-auth-library": "10.9.1",
     "hono": "^4.13.3"
   },
   "devDependencies": {

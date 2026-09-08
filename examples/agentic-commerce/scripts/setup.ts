@@ -8,11 +8,11 @@
  *   2. Merchant edge: Ed25519 key, did:key
  *   3. Shopping agent: Ed25519 key, did:key
  *   4. The RP's revocation list (all clear) → var/rp/status-list.json
- *   5. The first delegation (index 94) → var/delegation-94.json
+ *   5. Start the agent with no active delegation; the human issues through consent.
  */
 import { generateDidKeyFromBase64 } from '@kya-os/mcp';
 import { readEnvLocal, writeEnvLocal } from '../src/lib/env-local.js';
-import { cryptoProvider, RP_DID, STATUS_LIST_URL, env } from '../src/lib/wiring.js';
+import { cryptoProvider, RP_DID, STATUS_LIST_URL } from '../src/lib/wiring.js';
 
 async function ensureKey(prefix: 'RP' | 'MERCHANT' | 'AGENT', privName: string, pubName: string): Promise<{ privateKey: string; publicKey: string }> {
   const current = readEnvLocal();
@@ -43,17 +43,19 @@ async function main() {
   // Reload env so the modules below see the fresh values.
   for (const [k, v] of Object.entries(readEnvLocal())) process.env[k] = v;
 
-  // 4 + 5: the list and the first grant (imports after env is populated).
+  // 4 + 5: the list and a clean agent store (imports after env is populated).
   const { ensureDidDocument } = await import('../src/rp/server.js');
   const { ensureStatusList } = await import('../src/rp/statuslist.js');
-  const { issueAndActivate } = await import('../src/rp/issue.js');
+  const { clearActiveCredential, nextDelegationIndex } = await import('../src/rp/issue.js');
   const { makeVcSigningFunction, loadRpIdentity } = await import('../src/lib/wiring.js');
 
   const identity = loadRpIdentity();
   const didDoc = ensureDidDocument(identity);
   await ensureStatusList({ identity, signingFunction: makeVcSigningFunction(identity.privateKeyBase64), url: STATUS_LIST_URL });
-  const index = Number(env('STATUSLIST_INDEX', '94'));
-  const { file, vc } = await issueAndActivate({ index, agentDid, audience: merchantDid, identity, statusListUrl: STATUS_LIST_URL });
+  clearActiveCredential();
+  const { ConsentFlowStore } = await import('../src/rp/consent-store.js');
+  new ConsentFlowStore().invalidatePending();
+  const index = nextDelegationIndex();
 
   void rp;
   console.log(JSON.stringify({
@@ -61,7 +63,7 @@ async function main() {
     merchant: { did: merchantDid },
     agent: { did: agentDid },
     statusList: STATUS_LIST_URL,
-    delegation: { file, index, scope: vc.credentialSubject.delegation.constraints.crisp?.scopes?.[0]?.resource, expires: vc.expirationDate },
+    delegation: { active: false, reservedIndex: index, next: 'place_order returns a consent URL; the human approves the grant' },
     next: 'npm run demo  →  http://localhost:4949/',
   }, null, 2));
 }

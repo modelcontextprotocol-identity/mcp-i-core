@@ -1,140 +1,326 @@
 # From agent-visible to agent-actionable
 
-**A shopping agent reads what a merchant accepts, presents a delegation scoped to one GS1 Digital Link product class, and is revoked mid-session by its Responsible Party. Every verdict is produced by the published `@kya-os/mcp` verifier. Nothing is mocked.**
+A human grants a shopping agent authority to place an order for one GS1 Digital Link product class.
+The merchant verifies the grant, the agent's holder key, the CHF cap and the current revocation list before accepting the order.
+The Responsible Party can withdraw that authority mid-session.
+The signed, witnessed Merkle bundle records consent, issuance, allowed action, revocation and denial.
 
-Built for the W3C/GS1 workshop *E-Commerce for Humans and AI Agents* (Zurich, September 2026) as the live demonstration behind the position statement of the same name. It is the [REVOKED](../revoked/) example — the DEF CON 34 on-chain kill switch — re-shaped for a room of retailers: a merchant checkout instead of a wallet, a `did:web` Responsible Party instead of a chain, a GS1 Digital Link instead of a token symbol, and a hub-hosted StatusList2021 the merchant verifies on every call.
+Built for the GS1/W3C workshop **Ecommerce for Humans and AI Agents**, Zurich, 9 September 2026.
+Talk: **From Agent-Visible to Agent-Actionable: KYA-OS, a Rail-Agnostic Trust Layer for E-commerce**.
+This demonstration places orders; it does not move money or integrate a payment rail.
 
-> An offer an agent can find but cannot safely act on is a listing, not a sale. The trust layer is what makes an offer *actionable*: proof of who is calling, under whose authority, for exactly what, up to how much, until when — and a way to take that authority back.
+## Start here
 
-## The cast
-
-| Party | Identity | Holds | Runs |
-|---|---|---|---|
-| **Responsible Party** — the shopper's own hub | `did:web` | the issuing key, the revocation list, the authenticator ceremony | `:4950` |
-| **Merchant edge** — the verifier, the seller | `did:key` | the receipt-signing key, the discovery document, the catalog | `:4949` |
-| **Shopping agent** — the thing being governed | `did:key` | its own request-signing key and the delegation | a real MCP client (Claude Desktop through a gateway, or the console's simulated agent) |
-
-Three processes worth of separation in one `npm run demo`: the merchant trusts the Responsible Party's **signature**, resolved through its DID, not the hub and not this page.
-
-## Try it in 90 seconds
+Requires Node.js 20 or newer and Python 3.
+The consent UI is installed from the public npm registry as `@kya-os/consent@0.1.48`.
+Install dependencies before the workshop; the default demonstration runs on localhost without conference Wi-Fi.
+Claude Desktop needs its own network connection, so keep the scripted fallback ready.
 
 ```bash
 cd examples/agentic-commerce
 npm install
-npm run setup          # keys for all three parties, the RP's did.json, the all-clear list, the first grant
-npm run demo           # RP hub on :4950, merchant edge on :4949
-open http://localhost:4949/
+npm run setup
+npm run demo
 ```
 
-Then, on the console, press the number keys in order: `0` discover · `1` order · `2` wrong product · `3` over cap · `5` stolen credential · `K` revoke · `4` try again · `V` re-verify the receipt in Python — then the finale: `A` anchor the audit ledger · `T` let an insider edit it · `E` export the replay bundle. `R` resets, `P` is presenter mode, `C` high contrast, `Esc` closes the ledger.
+Project [the merchant console](http://localhost:4949/).
+The Responsible Party hub runs on port **4950**; the merchant runs on **4949**.
+Setup writes identity keys, DID documents, the status list and a reserved index, with **no active DelegationCredential**.
+Do not run the low-level `npm run issue` fixture utility for the live flow.
 
-The same beats from a terminal, if you prefer to read JSON:
+Press `1` to request two risotto, **CHF 39.80**.
+The merchant returns `needs_authorization`, and the console displays **Open human consent** with the actual authorization URL.
+Open it, inspect the package-rendered consent page and click **Approve grant**.
+Return to the console and press `4` to retry the same order.
+The order is authorized.
+Press `K` to revoke, then `4` again to see the denial.
+
+Cold restart, including setup and both services:
 
 ```bash
-npm run agent -- discover
-npm run agent -- order --product risotto --quantity 2      # ALLOWED, CHF 39.80, signed receipt
-npm run agent -- order --product risotto-lot               # ALLOWED — a lot beneath the class is in scope
-npm run agent -- order --product olive-oil                 # DENIED · PRODUCT_OUT_OF_SCOPE
-npm run agent -- order --product risotto --quantity 5      # DENIED · SPEND_CAP_EXCEEDED (CHF 99.50 > 50.00)
-npm run agent -- order --product risotto --forge           # DENIED · holder_binding_failed (right credential, wrong key)
-npm run revoke -- --index 94                               # the Responsible Party flips one bit and re-signs
-npm run agent -- order --product risotto                   # DENIED · Credential revoked via StatusList2021
+npm run demo:restart
 ```
 
+Stop the previous demo with `Ctrl+C` first.
+This command checks for occupied demo ports before changing state, prepares a fresh run, then starts both services.
+`R` on the console clears the active grant and pending consent sessions without restarting the services.
+It never issues a replacement grant; the next request needs human approval.
+Restart the process for a clean in-memory audit ledger.
+If using Google, sign in after the final restart: Google sessions and pending logins are intentionally in memory; account references and registered keys persist.
 
-## What each beat proves
+## Dylan's four-minute run of show: nine beats
 
-**0 · Discover.** The agent fetches the merchant's `/.well-known/mcp` before presenting anything: the merchant's DID (the audience the proof will be bound to), its proof algorithms and DID methods, its clock-skew tolerance, and — the block this example proposes for the publisher-side agent surface — `acceptedTrustSchemes`: which authority schemes it verifies, whether holder binding is required, how revocation is checked and what happens when the list is unreachable. Everything declared there is what the verifier enforces.
+Complete dependency installation and Claude configuration before the audience arrives.
+Keep one terminal at this example directory, the merchant console and Claude Desktop ready.
+Default spoken path: **click-wrap issue → status-list revoke**.
 
-**1 · Authorized order.** The agent calls `place_order` with its W3C Delegation Credential and a per-request holder proof signed by its own key. The shipped gate verifies, in this order: the credential's signature against the Responsible Party's resolved DID document, its validity window and audience, its **revocation status** (the RP's list is fetched and its signature verified on this call), the **holder key** (the caller holds the subject's key), and the flat scope. The merchant handler then reads two things out of the same credential: the **product class** — `scopeSatisfies(productUri, credential)` with the credential's own `prefix` matcher on the GS1 Digital Link — and the **cap**. The response carries a detached-JWS receipt signed by the merchant: an evidence record any party can verify.
+| Beat | Time | Exact action | What the audience sees |
+|---|---|---|---|
+| 1 | 0:00 | `npm run setup && npm run demo` | Merchant `:4949`, RP `:4950`, no active grant. |
+| 2 | 0:20 | Connect Claude with `docs/claude_desktop_config.json`; project `http://localhost:4949/`; press `P`. | The merchant verifier console. |
+| 3 | 0:35 | Send the pinned Claude prompt below. | `place_order` reaches the merchant before a grant exists. |
+| 4 | 1:00 | Open **Open human consent** on the console, or Claude's verified `authorizationUrl`. | Signed `needs_authorization`, then the real `@kya-os/consent` UI. |
+| 5 | 1:25 | Point out GTIN, MaxAmount CHF 50.00, audience and Responsible Party; click **Approve grant**. | Human approval issues the scoped credential. |
+| 6 | 2:00 | Return to Claude: **Retry the exact same place_order with the same product and quantity.** | Two risotto, CHF 39.80, authorized with a signed receipt. |
+| 7 | 2:30 | `npm run revoke` | The RP flips the active grant's status-list bit and publishes a newly signed list. |
+| 8 | 2:50 | In Claude: **Retry the exact same place_order again.** | Revoked denial; the agent still holds its key and credential. |
+| 9 | 3:15 | On the console press `E`, then run `npm run verify:ledger` and `npm run verify:ledger:py`. | Consent → delegation → allow → revoke → deny, with a verified honest Merkle bundle. |
 
-**2 · Wrong noun.** Another GTIN, refused by the scope matcher. The authorization is written in the Digital Link grammar: the class URI is the grant; `/10/<lot>` and `/21/<serial>` beneath it match for free; anything else does not.
+Pinned Claude prompt, with exact tool, GTIN, URI, quantity and cap:
 
-**3 · Over the cap.** The cap lives in the signed credential; the merchant enforces it. The trust layer never touches the payment.
+> Using only the connected `place_order` tool, place an order for exactly 2 risotto of GTIN `09506000134352`, product `https://id.gs1.org/01/09506000134352`, quantity `2`, total CHF 39.80, within a MaxAmount of CHF 50.00 per order. Do not pay. Do not browse the web or use another tool. If the merchant returns `needs_authorization`, show the authorizationUrl and stop until I approve the grant and ask you to retry. Retry with the exact same product and quantity.
 
-**5 · Stolen credential.** The real credential replayed under a thief's key: `holder_binding_failed`, refused before the handler runs. Not a bearer token.
+Say: “The human grants authority for this product class, to this merchant, up to this amount, until this time.”
+After revocation: “The agent still has its key; its authority has been withdrawn.”
+For the audit: “The evidence includes the human decision and what the merchant actually allowed or refused.”
+If there is time, press `T` to show that an insider edit fails verification even after the forged entry is re-signed.
 
-**K · The kill.** The Responsible Party sets one bit, re-signs the list, publishes the next version. With `KEY_WEBAUTHN=1` that needs a physical touch: the WebAuthn challenge *is* the SHA-256 of the revocation intent (this list, this index), so the assertion authorizes this revocation and nothing else. The agent's next request is refused — `Credential revoked via StatusList2021` — in one round trip.
+The consent page's primary action is **Approve grant**, its secondary action is **Deny**.
+Deny consumes that pending consent decision and issues no credential.
+A subsequent new request may ask for a new decision; a replay of the denied decision remains refused.
 
-**V · Any merchant, any language.** `scripts/verify-receipt.py` re-verifies the receipt with zero dependencies: the merchant's key derived from its `did:key`, the Ed25519 signature with RFC 8032 math, both bound hashes recomputed over RFC 8785 canonical JSON. No SDK.
+## Deterministic fallback, with the same human approval
 
-
-**A · The trail.** Every decision above was recorded as it happened by the SDK's audit protocol (`@kya-os/mcp/audit`), wired into the same middleware that gated the calls with `delivery: 'required'` — a call the merchant cannot record is a call it refuses. Each entry is signed by the merchant's key and hash-chained to its predecessor; `A` signs an **RFC 9162 checkpoint** (a Merkle root over the entry digests) and asks the Responsible Party to **witness** it: the hub verifies the checkpoint against the merchant's DID, checks that it consistently extends the last one it saw (an RFC 9162 consistency proof, not just the chain link), and countersigns an observation receipt. The overlay shows the ledger, the tree, the root, the witness, and one inclusion proof per entry.
-
-**T · The insider.** Someone with the merchant's signing key and write access to the journal rewrites the most recent refusal as a success, recomputes its digests and re-signs its receipt. The signature verifies — and the SDK's offline verifier (`verifyAuditBundle`, trust supplied only by a policy and a key file) still reports `chainIntegrity: invalid [PREDECESSOR_MISMATCH]` and `checkpointIntegrity: invalid [CHECKPOINT_ROOT_MISMATCH, MERKLE_PROOF_INVALID]`, while `anchorIntegrity` stays valid because the Responsible Party's receipt names the honest root. Re-signing the checkpoint too would contradict a third party.
-
-**E · The take-home.** `E` writes the SDK's replay bundle (`entries`, `checkpoints`, `inclusion-proofs`, `observations`, a signed manifest with per-component digests) plus `policy.json` and `keys.json` to `var/audit/`, and the edited bundle beside it. Two independent verifiers re-check both:
+Start the demo as above, then in another terminal:
 
 ```bash
-npm run verify:ledger              # SDK CLI (kya-audit verify) → 7-dimension report, exit 0
-npm run verify:ledger:tampered     # the edited bundle → chain + checkpoint invalid, exit 1
-npm run verify:ledger:py           # scripts/verify-ledger.py: stdlib Python, no SDK, ~1,400 checks, exit 0
+npm run demo:scripted
 ```
 
-Honest labelling, enforced by the SDK: the journal is in-memory for the stage, so `assertAuditCapabilities` refuses to let this deployment advertise more than **AAP-1** ("Recorded"). The same code on a durable journal is AAP-3; with the witness, AAP-4. The console says so on the checkpoint card.
+This is a real MCP client using the same `runAgentOrder` path as the gateway.
+It reads discovery and the catalog, clears any active demo grant, calls `place_order`, prints the verified consent URL and **waits for the human**.
+Open that URL on the projector and click **Approve grant**.
+The script retries the same two-risotto order, independently verifies the receipt, revokes the grant, checks the next order is denied, exports the bundle and verifies that the honest bundle passes while the tampered one fails.
+The script exits nonzero if any required step disagrees.
+It never auto-approves a grant.
+`DEMO_APPROVAL_TIMEOUT_SECONDS` defaults to 600; the merchant challenge's earlier expiry still applies.
 
-Two beats the stage does not show but the tests do: the hub going **down** (status unresolvable → refused; this merchant's policy is fail-closed, and that choice is the merchant's, not the protocol's), and `OFFLINE=1` (the RP's DID document served from the hub's mirror, signatures still verified).
+The console buttons are another deterministic MCP client:
 
-## Stage setup
+| Key | Action |
+|---|---|
+| `0` | Read merchant discovery and accepted trust schemes. |
+| `1` | Request two risotto, CHF 39.80; first request needs consent. |
+| `4` | Retry the same two-risotto order. |
+| `2` | Wrong product: olive oil, `PRODUCT_OUT_OF_SCOPE`. |
+| `3` | Five risotto, CHF 99.50, `SPEND_CAP_EXCEEDED`. |
+| `5` | Present the real credential with a thief's key, `holder_binding_failed`. |
+| `K` | Revoke the active grant on the RP status list. |
+| `V` | Verify the last allowed receipt with independent Python code. |
+| `A` | Anchor and witness the audit ledger. |
+| `T` | Attempt an insider edit against the witnessed ledger. |
+| `E` | Export honest and tampered bundles and verification reports. |
+| `R` | Clear the active grant; require fresh human consent. |
+| `P` / `C` | Presenter mode / higher contrast. |
+| `Esc` | Close the audit overlay. |
 
-### The Responsible Party's DID: public or local
+Presenter mode hides controls but keeps keyboard shortcuts and the consent link active.
+Rehearse at the projector's resolution.
 
-The default `RP_DID=did:web:localhost%3A4950` resolves to the hub on this laptop, which is what you want for rehearsal and for a venue with no network. The merchant rewrites `https://localhost:4950/…` to `http://` for loopback only (`ALLOW_INSECURE_LOCALHOST=1`); nothing else is downgraded.
+## Claude Desktop configuration
 
-For a public identity, before `npm run setup`:
+Use [docs/claude_desktop_config.json](docs/claude_desktop_config.json).
+Replace the example's absolute clone path and the absolute Node executable path, then merge the server entry into your existing Claude Desktop configuration.
+On macOS, that file is `~/Library/Application Support/Claude/claude_desktop_config.json`.
+Fully quit and reopen Claude Desktop after editing it.
+The gateway exposes **browse_catalog** and **place_order**.
+It loads paths relative to this example, so an arbitrary Claude working directory is safe.
+The agent also requires `MERCHANT_DID`; setup writes it to `.env.local`, which the gateway loads.
+
+The gateway signs each tool request with the agent's private key, verifies the merchant's response proof before exposing the authorization URL, and remembers the pending resume token.
+The approved credential is reloaded from the shared agent store on the next call.
+For the first retry, the gateway attaches the new credential, the matching resume token and a fresh holder-of-key proof.
+That first order may use any quantity or product instance within the approved product class and per-order cap; it need not repeat the order that triggered consent.
+Out-of-scope or over-cap attempts are refused before consuming the token.
+Private keys and proof arguments are kept out of the model's tool arguments and projector output.
+The projector deliberately displays the authorization URL, including its one-use resume token, so the human can open consent.
+
+## What the grant contains
+
+| Property | Demo value |
+|---|---|
+| Credential type | `DelegationCredential`, with the existing issuance shape. |
+| Issuer | Responsible Party `did:web:localhost%3A4950`. |
+| Subject / invoker | The shopping agent's `did:key`. |
+| Action | `place_order`, delegated under `commerce.order`. |
+| Product class | `https://id.gs1.org/01/09506000134352`, GTIN `09506000134352`. |
+| Scope matcher | CRISP `prefix`, plus the existing GS1 path-boundary check. |
+| MaxAmount | Existing constraint `maxAmount: "50.00"`, `currency: "CHF"`, `per: "order"`. |
+| Audience | The merchant's DID, shown on the consent page. |
+| Window | `VALID_HOURS=48`; the page shows the duration from approval, when the credential's expiry is set. |
+| Revocation | `StatusList2021Entry` at the RP-hosted list and the issued grant's assigned index. |
+
+`SCOPE_PRODUCT_CLASS`, `SPEND_CAP`, `SPEND_CURRENCY` and `VALID_HOURS` configure these existing constraints.
+Use the defaults for the pinned workshop prompt.
+The permission checkbox must remain selected to approve this single-scope grant.
+The RP validates the selected scope against the requested grant, persists it in the consent record and audit commitment, and uses that same scope when minting the credential.
+Passkey confirmation binds the selected scopes too; an empty, substituted or changed selection cannot issue a grant.
+No new Entity Card fields or product models are introduced.
+
+## Optional passkey or DEF CON badge
+
+`CONSENT_WEBAUTHN=0` is the default click-wrap consent path, independent of `KEY_WEBAUTHN=0` for revocation.
+Hardware is not required for the nine spoken beats.
+`CONSENT_WEBAUTHN=1` enables the optional issuance ceremony using the RP's existing WebAuthn stack.
+The assertion is bound to an issuance intent containing the agent, scopes, cap, resume token and nonce.
+When enabled with a registered authenticator, issuing the grant requires the valid assertion; the consent audit records the authenticator identity.
+
+Register an authenticator through the existing setup UI before trying the hardware path:
 
 ```bash
-echo 'RP_DID=did:web:hub.example.com' >> .env.local      # a domain you control
-npm run setup                                           # writes var/rp/did.json for that DID
-# publish var/rp/did.json at https://hub.example.com/.well-known/did.json
+KEY_SETUP=1 npm run demo
+# Open http://localhost:4949/setup-key.html and register a FIDO2 authenticator.
+# Stop the demo, then:
+CONSENT_WEBAUTHN=1 npm run demo
 ```
 
-The hub keeps serving the same document at `/.well-known/did.json`, and `RP_DID_MIRROR_URL` (default: the hub's copy) is used when the network fails or `OFFLINE=1` is set. The console says where the document came from. Changing `RP_DID` after setup is fine: re-run `npm run setup` and it re-derives the key id, the DID document, the list and the first grant for the new DID (the signing key is kept).
+A compatible FIDO2 conference badge, YubiKey or platform passkey can perform that ceremony.
+Use the exact configured WebAuthn origin; `localhost` and `127.0.0.1` are different origins.
+The consent integration handles its configured origin separately from the existing revocation origin.
+If no authenticator is registered, the page offers registration and preserves the default click-wrap fallback.
+Switch back to `CONSENT_WEBAUTHN=0` for the spoken run if the laptop or badge is unreliable.
 
-### The authenticator (any FIDO2 key, or Touch ID)
+`KEY_WEBAUTHN=1` independently enables the existing touch-to-revoke ceremony.
+`DEMO_BYPASS_WEBAUTHN=1` remains the existing revocation bypass.
+Do not require both ceremonies during the four-minute talk.
+The browser regression `npm run test:webauthn:browser` uses Chromium's virtual authenticator to exercise real registration, issuance assertion verification, order, software revoke and denial without physical hardware.
+It uses the same Playwright and `CHROMIUM` prerequisites as the capture script.
+
+## Show the human behind the agent
+
+The optional Google account path links a signed-in account to its registered passkey and the exact agent grant.
+The passkey itself does not supply a name or email.
+Google supplies account claims; the RP verifies the identity token and binds registration to that account.
+The displayed name is provider-supplied account data, not a verified legal identity.
+
+Create a Google OAuth client of type **Web application**.
+Add both `http://localhost` and `http://localhost:4950` as **Authorized JavaScript origins**.
+This integration uses the Google Identity Services JavaScript callback, so no client secret or redirect URI is needed.
+See [Google's setup guide](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
+
+Set the public client ID in this example's `.env.local`, preserving its existing keys:
+
+```dotenv
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+```
+
+Stop the running demo, then:
 
 ```bash
-KEY_SETUP=1 npm run demo         # then open http://localhost:4949/setup-key.html
+KEY_SETUP=1 CONSENT_WEBAUTHN=1 npm run demo
 ```
 
-Register more than one — a security key, a conference badge, the laptop's platform authenticator — with a label each; whichever is in your hand on stage works. Then:
+Open `http://localhost:4950/setup-key.html` in Chrome, sign in with Google and register a passkey.
+On the merchant console, press `R`, then `1`, open consent and approve with that passkey.
+The grant panel shows **Google account → passkey approval → consent → agent**, along with the original GS1 scope and CHF cap.
+Google sign-in requires connectivity; the original local click-wrap flow and recorded backup remain available with `GOOGLE_CLIENT_ID` unset.
+
+Configuring Google requires both a valid account session and that account's passkey for issuance, even if `CONSENT_WEBAUTHN` is off.
+An anonymous or different account's registered authenticator cannot approve the named grant.
+Keys registered before Google sign-in remain anonymous and need fresh account-bound registration.
+Google sessions expire and end when the RP process restarts; the account references and registered keys persist.
+
+The existing signed credential metadata contains `demoConsent`: an opaque account reference, Google issuer and display name, consent reference, passkey reference, approval time and issuance-intent hash.
+The same snapshot is committed by the consent audit events.
+The raw Google subject, email, identity token and access tokens are excluded from this signed public metadata.
+The RP remains the credential issuer and the shopping agent remains its subject.
+Neither the name nor the device label is used to make authorization decisions.
+
+The client ID must be configured before testing actual Google sign-in.
+Automated identity tests use locally signed test tokens with Google's real verifier; those tests do not claim a live Google account login.
+With the browser prerequisites below installed, `npm run test:google:browser` runs that isolated account session through actual passkey registration, consent, the named projector grant, order, revocation and audit verification.
+It writes `docs/screenshots/google-identity/google-identity-browser-report.json` and screenshots.
+The test issuer and certificate substitution exist only in the isolated browser fixture, never in the live demo routes.
+
+## Evidence and verification
 
 ```bash
-KEY_WEBAUTHN=1 npm run demo      # revocation now requires a touch
-DEMO_BYPASS_WEBAUTHN=1 KEY_WEBAUTHN=1 npm run demo   # software path, if a key misbehaves
+npm test
+npm run typecheck
+npm run demo:e2e
 ```
 
-WebAuthn works on `localhost` without TLS; keep the console there.
+The end-to-end suite uses ephemeral ports and no model.
+It covers a fresh agent, proof-bound authorization URL, real consent HTML, selected-scope persistence, denial, issuance, grant-bound first use, independent receipt verification, wrong GTIN, cap, revoked status, expired and mismatched consent, and the audit export and tamper checks.
+The existing product boundary, resolver fail-closed and holder-binding checks remain in place.
+The seven projector gates distinguish signature, holder, consent, scope, cap, revocation and order decisions.
+The projector tests execute the page's actual SSE handlers for absent grants, safe consent links, approval, denial and reset.
 
-### Claude Desktop as the agent (optional)
+After the live flow, press `E` to write the replay bundles to `var/audit/`, then:
 
-Merge `docs/claude_desktop_config.json` into your Claude Desktop config (absolute paths, as the comment explains), restart Claude, and ask it to check its authority and order two boxes of risotto. Claude sees `browse_catalog`, `my_authority`, `place_order` — no crypto arguments. The gateway holds the agent's key and the delegation and signs every call; the console lights the same gates because the merchant has a single emission point. The simulated agent is deterministic; use it for the timed beats and Claude for colour.
-
-### Presenter notes
-
-`P` hides the controls and enlarges the signal for a projector or a Meet screen share; `C` adds contrast for washed-out rooms. Rehearse once at 1280×720 — half the audience is remote. `R` issues a fresh grant at the next status-list index without restarting anything; `npm run revoke -- --index N --restore` clears a bit if you need the same index back. The audit ledger lives in the merchant process: restart `npm run demo` for a clean ledger before the show (the ledger of a rehearsal is real history, and the witness will refuse a checkpoint that does not extend what it already saw). `AUDIT_WITNESS=0` runs without the witness.
-
-## What is real and what is a demo convenience
-
-- The gate is the published middleware (`createKyaOsMiddleware` with `holderBinding: 'enforce'` and a `StatusListResolver`). The console's six gates follow the middleware's actual order; the last two are the merchant handler's own reads of the verified credential.
-- `HttpStatusListResolver` (`src/lib/http-statuslist-resolver.ts`) is this example's implementation of the shipped `StatusListResolver` seam, modelled on the SDK's `CheqdStatusListResolver`: it verifies the list's Ed25519Signature2020 proof against the issuer's resolved DID document and fails closed on everything else. It is not yet in the SDK.
-- `acceptedTrustSchemes` in the discovery document is a **proposal** for the publisher-side agent surface, not a KYA-OS specification field. The rest of the document follows `schemas/well-known-mcpi.json`.
-- The GS1 Digital Link scope is a **profile** of the existing CRISP scope (`{ resource, matcher: 'prefix' }`): no new mechanism, one convention. The handler adds a path-boundary re-check so `prefix` can never admit a longer GTIN.
-- The status list is hosted by the hub over plain HTTP on this laptop. Where you host it — your domain, a registry, a ledger (REVOKED anchored the same signed document on cheqd) — is policy; the protocol needs a URL and a signature. The hub keeps an append-only version history locally; a ledger makes that history one nobody can rewrite.
-- Payment is out of scope by design. The receipt says `authorized-for-capture`; spend enforcement and settlement stay with the merchant/PSP.
-- The audit trail is the shipped protocol end to end — recorder, journal, checkpoint builder, Merkle tree, observer, replay-bundle exporter and verifier are all `@kya-os/mcp/audit`; `src/merchant/audit.ts` only renders, forges and exports. The journal and checkpoint store are the SDK's in-memory providers (hence AAP-1). The witness runs inside the RP hub process for the stage; in production it is any party the merchant does not control.
-- The package's `kya-audit` bin only runs when invoked as `…/audit/cli.js` (its self-invocation guard does not recognise the npm bin shim), so the `verify:ledger` scripts call the file directly. A one-line fix upstream.
-
-## Layout
-
-```
-src/lib/        wiring (env, keys, paths) · key shims · mirror-capable fetch provider · HttpStatusListResolver · GS1 Digital Link + catalog
-src/rp/         the Responsible Party's hub: did.json, status list, issue, revoke, WebAuthn ceremony, audit witness
-src/merchant/   the merchant edge: MCP server + shipped gate, place_order, discovery document, console API, audit trail
-src/agent/      the agent: discover, order (MCP client + holder proof), Claude Desktop gateway
-web/            the console (index.html) and authenticator registration (setup-key.html)
-scripts/        setup.ts · verify-receipt.py + verify-ledger.py (stdlib Python) · screenshot-run.py (headless smoke test)
-tests/          product/scope decisions · resolver fail-closed matrix · every beat end to end, incl. the finale, hub-down and offline
+```bash
+npm run verify:ledger
+npm run verify:ledger:py
+npm run verify:ledger:tampered
 ```
 
-`npm test` runs all of it in-process on ephemeral ports.
+The honest bundle must exit **0**.
+The tampered bundle must exit **1** with integrity failures; that deliberate rejection is the expected result.
+The SDK verifier reports separate dimensions for signatures, chain, checkpoint, witness and authorization evidence.
+An `indeterminate` evidence dimension is distinct from an invalid signature or Merkle proof.
+The in-memory journal advertises AAP-1, as enforced by the SDK; the witness is real, but it does not turn this demo into a durable journal.
+The existing audit implementation, status-list resolver, GS1 policy and verifier scripts remain the source of truth.
+
+## Recorded fallback and browser rehearsal
+
+Install browser capture dependencies before the event:
+
+```bash
+python3 -m pip install playwright
+python3 -m playwright install chromium
+```
+
+With the default click-wrap demo running:
+
+```bash
+npm run demo:capture
+# Equivalent:
+python3 scripts/screenshot-run.py docs/screenshots/consent --presenter --record-video --duration 90
+```
+
+The driver clicks the actual consent component's **Deny** and **Approve grant** buttons, verifies visible GTIN, URI, MaxAmount, currency and audience, then checks the allowed order, scope/cap refusals, revocation and ledger tamper rejection.
+It writes screenshots, `consent-browser-report.json` and a minimum 90-second `consent-demo-backup.webm` into `docs/screenshots/consent/`.
+Play the local recording if Claude or the venue connection fails.
+Set `CHROMIUM` to a local Chrome executable if Chromium is installed outside Playwright's default location.
+For a quick rehearsal without video, omit `--record-video`.
+Add `--check-variants` to submit both native no-JavaScript consent forms and check the mobile layout at 390 pixels wide.
+The valid consent URL is fetched before the approval screenshot, so the first projected paint contains the grant rather than a loading skeleton.
+
+## Workshop screenshots and backup
+
+These screenshots use the published `@kya-os/consent@0.1.48` package.
+“Workshop Test Human” is a fictional account in the isolated acceptance fixture; Chromium's virtual authenticator performs the WebAuthn registration and assertion.
+
+![Human approval of the exact GS1 product class, CHF 50 cap, merchant audience and 48-hour grant](docs/screenshots/0.1.48/consent-with-passkey.png)
+
+- [Account-bound passkey registration](docs/screenshots/0.1.48/passkey-registered.png)
+- [The signed human-to-agent relationship on the projector](docs/screenshots/0.1.48/human-to-agent-projector.png)
+- [90-second click-wrap demonstration backup](docs/screenshots/consent/consent-demo-backup.webm)
+
+## Implementation boundaries
+
+The merchant uses published `createKyaOsMiddleware` with `holderBinding: 'enforce'` and the existing HTTP status-list resolver.
+After credential verification, the original merchant handler applies the GS1 prefix/path-boundary and per-order cap decisions.
+Every protected call receives a fresh status-list observation; an unreadable or untrusted list fails closed.
+`acceptedTrustSchemes` remains the demo's discovery proposal; the GS1 resource remains a profile of the existing CRISP scope.
+The localhost issuer is already the Responsible Party, so the human's explicit button approval is sufficient for this demonstration's trust boundary.
+
+The response proof for `needs_authorization` binds the whole challenge body, including `authorizationUrl`.
+The RP confirms the pending session, agent, scopes, merchant audience and expiry before issuing through `issueDelegation` / `issueAndActivate`.
+The issuer uses `DelegationCredentialIssuer.createAndIssueDelegation` without inventing a different credential shape.
+The agent store is `var/active-index.json` plus `var/delegation-<index>.json`.
+A denied, expired, modified or reused consent decision cannot issue a new grant.
+
+For local or offline rehearsal the default RP DID resolves to this laptop.
+`ALLOW_INSECURE_LOCALHOST=1` permits the existing loopback-only HTTPS-to-HTTP rewrite; unrelated hosts are not downgraded.
+`OFFLINE=1` resolves the RP DID document through the hub mirror while still verifying signatures.
+`AUDIT_WITNESS=0` disables witnessing for diagnostic runs; leave it enabled for the workshop.
+
+
+## Published consent package
+
+This example pins `@kya-os/consent` to the published **0.1.48** release, which includes the reviewed scope-selection behavior and human identity and grant-detail slots from [PR #726](https://github.com/modelcontextprotocol-identity/xmcp-i/pull/726).
+The normal `npm install` command installs the complete browser bundle and its dependencies directly from npm.
+The host validates the selected scopes and passkey assertion before issuing the grant; the package supplies the consent controls and layout.
+
+Use `npm run test:google:browser` and `npm run test:webauthn:browser` to verify the actual consent component with the named account and default RP flows.
