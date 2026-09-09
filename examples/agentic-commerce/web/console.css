@@ -255,7 +255,8 @@ body.presenter .log { font-size: 21px; }
 }
 @media (min-width: 601px) and (max-width: 780px) {
   .site-header { flex-wrap: wrap; gap: 8px 16px; }
-  .console { grid-template-columns: 190px minmax(0, 1fr); }
+  /* Leave the live log room when wider system fonts wrap the header. */
+  .console { grid-template-columns: 190px minmax(0, 1fr); row-gap: 8px; }
   .decision-heading { --decision-font: 40px; }
   #decision-summary { font-size: 16px; }
   .decision-symbol { width: 48px; height: 48px; }

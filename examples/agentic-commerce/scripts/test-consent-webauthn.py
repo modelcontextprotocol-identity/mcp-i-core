@@ -134,15 +134,17 @@ async def assert_console_layout(page, output=None, screenshot_name=None):
         log_box = await page.locator('#log').bounding_box()
         assert log_box['height'] >= 180, f'Log too small at {width}x{height}: {log_box}'
         if width == 640:
-            # Reproduce the extra footer wrapping from Linux font metrics on
-            # macOS too. The activity viewport must retain its usable height.
-            await page.locator('.controls').evaluate("node => node.style.setProperty('--sans', 'Verdana, sans-serif')")
+            # Reproduce Linux font metrics across the header and controls on
+            # macOS too. A wrapped header must not squeeze the activity viewport.
+            await page.locator('body').evaluate("node => node.style.setProperty('--sans', 'Verdana, sans-serif')")
             try:
                 wrapped_log = await page.locator('#log').bounding_box()
-                assert wrapped_log['height'] >= 180, f'Wrapped controls squeeze the live log: {wrapped_log}'
-                assert await page.evaluate('document.documentElement.scrollHeight <= innerHeight'), 'Wrapped controls force page scrolling'
+                if output and screenshot_name:
+                    await page.screenshot(path=str(output / f'{screenshot_name}-640x900-wide-font.png'), full_page=True)
+                assert wrapped_log['height'] >= 180, f'Wrapped header and controls squeeze the live log: {wrapped_log}'
+                assert await page.evaluate('document.documentElement.scrollHeight <= innerHeight'), 'Wrapped header and controls force page scrolling'
             finally:
-                await page.locator('.controls').evaluate("node => node.style.removeProperty('--sans')")
+                await page.locator('body').evaluate("node => node.style.removeProperty('--sans')")
         sizes = await page.evaluate("""() => ({
           action: parseFloat(getComputedStyle(document.querySelector('#btn-order')).fontSize),
           log: parseFloat(getComputedStyle(document.querySelector('#log')).fontSize),
