@@ -130,6 +130,10 @@ jobs:
         if: matrix.node-version == '22.x'
         run: npm run test:google:browser
 
+      - name: Test shared live-feed recovery after fatal HTTP errors
+        if: matrix.node-version == '22.x'
+        run: python3 scripts/test-event-streams-browser.py --outdir docs/screenshots/event-streams
+
       - name: Upload browser evidence
         if: always() && matrix.node-version == '22.x'
         uses: actions/upload-artifact@v7
@@ -138,6 +142,7 @@ jobs:
           path: |
             examples/agentic-commerce/docs/screenshots/webauthn/
             examples/agentic-commerce/docs/screenshots/google-identity/
+            examples/agentic-commerce/docs/screenshots/event-streams/
           if-no-files-found: ignore
           retention-days: 7
 

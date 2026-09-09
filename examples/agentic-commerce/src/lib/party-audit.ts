@@ -140,6 +140,20 @@ export interface AnchorResult {
   witnessError: string | null;
 }
 
+/** Honest final-run evidence, independent of the selected insider demonstration. */
+export interface AuditArchiveSnapshot {
+  ledger: { ledgerId: string; ledgerEpochId: string };
+  entries: number;
+  checkpointDigest: string;
+  manifestDigest: string;
+  witnessed: boolean;
+  witnessError: string | null;
+  bundle: AuditReplayBundleV1;
+  policy: AuditVerificationPolicyV1;
+  keys: { keys: Array<{ kid: string; jwk: Record<string, unknown> }> };
+  verification: AuditVerificationReportV1;
+}
+
 export interface PartyAudit {
   /** What `createKyaOsMiddleware` takes: record + the honest assurance claim. */
   middlewareAudit: KyaOsAuditTrail;
@@ -158,6 +172,8 @@ export interface PartyAudit {
   exportBundle(): Promise<ExportResult>;
   /** The honest replay bundle (for download). */
   bundle(): Promise<AuditReplayBundleV1>;
+  /** Whole current run; leaves the displayed checkpoint and edit unchanged. */
+  snapshotForArchive(): Promise<AuditArchiveSnapshot | null>;
 }
 
 export interface PartyAuditOptions {
@@ -258,14 +274,11 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
 
   const entries = () => journal.snapshot(ledger);
 
-  async function anchor(): Promise<AnchorResult> {
+  async function checkpointSnapshot(): Promise<AnchorResult> {
     const all = await entries();
     if (all.length === 0) throw new Error('nothing to anchor yet — run a beat first');
     const checkpoint = await builder.createCheckpoint(ledger); // idempotent at the same tree size
     const created = latest?.checkpoint.checkpointDigest !== checkpoint.checkpointDigest;
-    // A new anchor starts a new demonstration. Merely appending live events
-    // leaves the displayed experiment and its downloadable evidence intact.
-    if (created) lastDemonstration = null;
     let witness: AuditObservationReceiptV1 | null = created ? null : (latest?.witness ?? null);
     let witnessError: string | null = null;
     if (options.witnessUrl && !witness) {
@@ -287,7 +300,15 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
         witnessError = err instanceof Error ? err.message : String(err);
       }
     }
-    latest = { checkpoint, created, witness, witnessError };
+    return { checkpoint, created, witness, witnessError };
+  }
+
+  async function anchor(): Promise<AnchorResult> {
+    const snapshot = await checkpointSnapshot();
+    // A new displayed anchor starts a new demonstration. Archiving a run
+    // separately must not change the screen if Start over later fails.
+    if (snapshot.created) lastDemonstration = null;
+    latest = snapshot;
     return latest;
   }
 
@@ -542,7 +563,22 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     return structuredClone((lastDemonstration?.material ?? await materialize()).honest);
   }
 
-  return { middlewareAudit, record: (input, recordOptions) => trail.record(input, recordOptions), capabilities, ledger, recorder: recorderRef, entries, anchor, report, tamper, exportBundle, bundle };
+  async function snapshotForArchive(): Promise<AuditArchiveSnapshot | null> {
+    if ((await entries()).length === 0) return null;
+    const m = await materialize(await checkpointSnapshot());
+    const verification = await verify(m.honest, m.policy, m.keys);
+    if ([verification.cryptographicIntegrity, verification.chainIntegrity, verification.checkpointIntegrity]
+      .some(dimension => dimension.verdict !== 'valid')) throw new Error('AUDIT_ARCHIVE_INVALID: the complete run did not verify; the current run remains active.');
+    if (m.anchor.witness && verification.anchorIntegrity.verdict !== 'valid') {
+      throw new Error('AUDIT_ARCHIVE_INVALID: the returned witness evidence did not verify; the current run remains active.');
+    }
+    return structuredClone({ ledger, entries: m.all.length,
+      checkpointDigest: m.anchor.checkpoint.checkpointDigest, manifestDigest: m.honest.manifest.manifestDigest,
+      witnessed: m.anchor.witness !== null, witnessError: m.anchor.witnessError,
+      bundle: m.honest, policy: m.policy, keys: m.keys, verification });
+  }
+
+  return { middlewareAudit, record: (input, recordOptions) => trail.record(input, recordOptions), capabilities, ledger, recorder: recorderRef, entries, anchor, report, tamper, exportBundle, bundle, snapshotForArchive };
 }
 
 // ---------------------------------------------------------------------------

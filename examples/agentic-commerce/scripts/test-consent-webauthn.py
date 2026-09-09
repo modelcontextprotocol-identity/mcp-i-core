@@ -919,6 +919,46 @@ async def browser_check(merchant, rp, output, state):
             result = subprocess.run(['python3', str(ROOT / 'scripts/verify-ledger.py'), str(state / 'var/audit' / filename), '--keys', str(state / 'var/audit/keys.json'), '--quiet'], capture_output=True, text=True)
             assert result.returncode == code, result.stdout + result.stderr
         report['checks'].append('Honest witnessed bundle verified and tampered bundle rejected')
+        # Start over archives the merchant run; it never erases the RP history.
+        # Exercise the real button after the finale, including a freshly opened audit.
+        before_reset = await (await context.request.get(merchant + '/api/audit/ledger')).json()
+        rp_before_reset = await (await context.request.get(rp + '/api/rp/audit/ledger')).json()
+        rp_visible_history = await page.locator('#rp-log').inner_text()
+        async with page.expect_response(lambda response: response.url == merchant + '/api/act/reset') as resetting:
+            await page.locator('#btn-reset').click()
+        reset_response = await resetting.value
+        reset_result = await reset_response.json()
+        assert reset_response.ok and reset_result['success'] is True, reset_result
+        assert reset_result['auditRunId'] != before_reset['ledger']['ledgerEpochId']
+        assert reset_result['archivedAudit']['ledgerEpochId'] == before_reset['ledger']['ledgerEpochId']
+        await expect(page.locator('#verdict-code')).to_have_text('NO_GRANT')
+        await expect(page.locator('#audit-overlay')).not_to_be_visible()
+        await expect(page.locator('#audit-table')).to_be_empty()
+        await expect(page.locator('#audit-export')).to_be_empty()
+        await expect(page.locator('#audit-root')).to_be_empty()
+        await expect(page.locator('#audit-n')).to_have_text('0 ENTRIES')
+        await expect(page.locator('#receipt')).to_have_text('Every allowed response is signed by the merchant’s key. Its receipt can be verified by any party.')
+        await expect(page.locator('#log')).to_contain_text('Previous merchant run archived')
+        await expect(page.locator('#log .log-line')).to_have_count(1)
+        assert rp_visible_history in await page.locator('#rp-log').inner_text(), 'Start over erased visible RP history'
+        after_reset = await (await context.request.get(merchant + '/api/audit/ledger')).json()
+        assert after_reset['entries'] == [] and after_reset['ledger']['ledgerEpochId'] == reset_result['auditRunId']
+        rp_after_reset = await (await context.request.get(rp + '/api/rp/audit/ledger')).json()
+        assert rp_after_reset['entries'][:len(rp_before_reset['entries'])] == rp_before_reset['entries'], 'Start over altered recorded RP evidence'
+        await page.wait_for_function("!document.querySelector('.decision-heading').classList.contains('is-decoding')")
+        await page.screenshot(path=str(output / 'console-start-over-fresh.png'), full_page=True)
+        await page.locator('#btn-audit').click()
+        await expect(page.locator('#audit-status')).not_to_be_visible()
+        await expect(page.locator('#audit-overlay')).to_have_attribute('aria-busy', 'false')
+        await expect(page.locator('#audit-chain-note')).to_have_text('0 entries · fresh run')
+        await expect(page.locator('#audit-table')).to_contain_text('No merchant decisions')
+        await expect(page.locator('#audit-cp')).to_contain_text('No checkpoint yet')
+        await expect(page.locator('#audit-tree-root')).to_be_empty()
+        await expect(page.locator('#audit-export')).to_be_empty()
+        await expect(page.locator('#audit-edit')).to_be_disabled()
+        await page.screenshot(path=str(output / 'console-start-over-empty-audit.png'), full_page=True)
+        (output / 'audit-run-reset-report.json').write_text(json.dumps({'reset': reset_result, 'merchantEntries': len(after_reset['entries']), 'rpEntriesBefore': len(rp_before_reset['entries']), 'rpEntriesAfter': len(rp_after_reset['entries'])}, indent=2))
+        report['checks'].append('Start over archives the previous merchant epoch and clears audit, receipt and activity only after confirmation; signed RP history remains intact and Show audit opens an honest empty run')
         assert not errors, errors
         report['ok'] = True
         (output / ('google-identity-browser-report.json' if args.google_identity else 'webauthn-browser-report.json')).write_text(json.dumps(report, indent=2))

@@ -1196,3 +1196,188 @@ describe('console HTTP failure handling', () => {
       .toContain('HTTP 403: Operator authentication required');
   });
 });
+
+describe('merchant audit run reset', () => {
+  const reset = { success: true, auditRunId: 'epoch-fresh', archivedAudit: { ledgerEpochId: 'epoch-old' } };
+
+  it('shows an honest empty audit after reset without claiming broken chains, signatures or exportable evidence', async () => {
+    const p = await projector(); p.emit('/api/events', { type: 'reset', ...reset });
+    p.state.responses['/api/act/audit'] = {
+      ...auditFixture(), entries: [], checkpoint: null, witness: null, tree: [], inclusions: [], chainIntact: false, allIncluded: false,
+    };
+    await p.get('btn-audit').onclick!();
+    expect(p.get('audit-status').hidden).toBe(true);
+    expect(p.get('audit-table').innerHTML).toContain('No merchant decisions');
+    expect(p.get('audit-chain-note').textContent).toContain('0 entries');
+    expect(p.get('audit-chain-note').textContent).not.toContain('BROKEN');
+    expect(p.get('audit-cp').innerHTML).toContain('No checkpoint yet');
+    expect(p.get('audit-cp').innerHTML).not.toContain('signed');
+    expect(p.get('audit-edit').disabled).toBe(true);
+    expect(p.get('audit-export').innerHTML).toBe('');
+    await p.get('btn-export').onclick!();
+    expect(p.state.requests).not.toContain('/api/act/export');
+    expect(p.get('audit-status').textContent).toContain('No entries to export');
+  });
+
+  it('clears the merchant run only after HTTP success, including missed reset SSE, and retains RP history', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!();
+    p.get('receipt').innerHTML = 'Old signed receipt';
+    p.get('rp-log').innerHTML = 'Retained RP consent history';
+    let finish!: (value: unknown) => void;
+    p.state.responses['/api/act/reset'] = new Promise(resolve => { finish = resolve; });
+    const pending = p.get('btn-reset').onclick!();
+    expect(p.get('audit-table').innerHTML).toContain('table');
+    expect(p.get('receipt').innerHTML).toBe('Old signed receipt');
+    finish(reset); await pending;
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(false);
+    expect(p.get('audit-table').innerHTML).toBe('');
+    expect(p.get('audit-export').innerHTML).toBe('');
+    expect(p.get('audit-root').textContent).toBe('');
+    expect(p.get('audit-n').innerHTML).toContain('0');
+    expect(p.get('receipt').innerHTML).not.toContain('Old signed receipt');
+    expect(p.get('rp-log').innerHTML).toBe('Retained RP consent history');
+    expect(p.get('verdict-code').textContent).toBe('NO_GRANT');
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const fresh = p.get('btn-audit').onclick!();
+    expect(p.get('audit-body').hidden).toBe(true);
+    finish(editableAuditFixture()); await fresh;
+  });
+
+  it('retains a loaded audit when the server refuses reset', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!();
+    const table = p.get('audit-table').innerHTML;
+    p.state.statuses['/api/act/reset'] = 409;
+    p.state.responses['/api/act/reset'] = { error: 'archive_failed' };
+    await p.get('btn-reset').onclick!();
+    expect(p.get('audit-table').innerHTML).toBe(table);
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(true);
+  });
+
+  it.each([{}, { success: false }])('requires explicit successful reset confirmation before clearing the run: %j', async result => {
+    const p = await projector(); p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!();
+    const table = p.get('audit-table').innerHTML;
+    p.state.responses['/api/act/reset'] = result;
+    await p.get('btn-reset').onclick!();
+    expect(p.get('audit-table').innerHTML).toBe(table);
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(true);
+    expect(p.get('log').children[0]!.children[0]!.innerHTML).toContain('did not confirm reset');
+  });
+
+  it('ignores an old checkpoint response after another monitor resets, without releasing a new action', async () => {
+    const p = await projector();
+    let oldFinish!: (value: unknown) => void, newFinish!: (value: unknown) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { oldFinish = resolve; });
+    const old = p.get('btn-audit').onclick!();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    p.emit('/api/events', { type: 'reset', ...reset });
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { newFinish = resolve; });
+    const current = p.get('btn-audit').onclick!();
+    oldFinish(editableAuditFixture()); await old;
+    expect(p.get('audit-table').innerHTML).toBe('');
+    expect(p.get('audit-body').hidden).toBe(true);
+    expect(p.get('audit-overlay').getAttribute('aria-busy')).toBe('true');
+    const report = editableAuditFixture(); report.ledger.ledgerEpochId = 'epoch-fresh';
+    newFinish(report); await current;
+    expect(p.get('audit-ledger-id').textContent).toContain('epoch-fresh');
+  });
+
+  it('discards an in-flight edit response from the archived run', async () => {
+    const p = await projector(); p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!(); await p.get('audit-edit').onclick!();
+    p.get('audit-edit-entry').value = '2'; p.get('audit-edit-entry').onchange!();
+    p.get('audit-edit-outcome').value = 'failed'; p.get('audit-edit-outcome').onchange!();
+    let finish!: (value: unknown) => void;
+    p.state.responses['/api/act/tamper'] = new Promise(resolve => { finish = resolve; });
+    const pending = p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    p.emit('/api/events', { type: 'reset', ...reset });
+    finish(editedAuditFixture()); await pending;
+    expect(p.get('audit-table').innerHTML).toBe('');
+    expect(p.get('audit-editor').hidden).toBe(true);
+    expect(p.get('audit-verdicts').innerHTML).toBe('');
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(false);
+  });
+
+  it('never exports a stale checkpoint if reset completes while export is acquiring it', async () => {
+    const p = await projector(); let finish!: (value: unknown) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const exporting = p.get('btn-export').onclick!();
+    p.emit('/api/events', { type: 'reset', ...reset });
+    finish(editableAuditFixture()); await exporting;
+    expect(p.state.requests).not.toContain('/api/act/export');
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(false);
+    expect(p.get('audit-table').innerHTML).toBe('');
+  });
+
+  it('ignores a delayed duplicate reset notification after a new request has begun', async () => {
+    const p = await projector(); p.state.responses['/api/act/reset'] = reset;
+    await p.get('btn-reset').onclick!();
+    p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+    expect(p.get('seal').textContent).toBe('VERIFYING');
+    const lines = p.get('log').children.length;
+    p.emit('/api/events', { type: 'reset', ...reset });
+    expect(p.get('seal').textContent).toBe('VERIFYING');
+    expect(p.get('log').children).toHaveLength(lines);
+  });
+
+  it('does not unlock or repaint a new action when the earlier reset HTTP response arrives after SSE', async () => {
+    const p = await projector(); let finish!: (value: unknown) => void;
+    p.state.responses['/api/act/reset'] = new Promise(resolve => { finish = resolve; });
+    const resetting = p.get('btn-reset').onclick!();
+    p.emit('/api/events', { type: 'reset', ...reset });
+    let finishAudit!: (value: unknown) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finishAudit = resolve; });
+    const auditing = p.get('btn-audit').onclick!();
+    finish(reset); await resetting;
+    expect(p.get('audit-overlay').getAttribute('aria-busy')).toBe('true');
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(true);
+    finishAudit(editableAuditFixture()); await auditing;
+  });
+
+  it.each(['resolve', 'reject'])('discards an old order %s after reset without replacing the new decision', async mode => {
+    const p = await projector(); let finish!: (value: unknown) => void, fail!: (reason: Error) => void;
+    p.state.responses['/api/act/order'] = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    const order = p.get('btn-order').onclick!();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    p.emit('/api/events', { type: 'reset', ...reset });
+    p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+    const lines = p.get('log').children.length;
+    if (mode === 'reject') fail(new Error('Old request failed'));
+    else finish({ result: { content: [{ text: JSON.stringify({ error: 'needs_authorization', resumeToken: 'old-token' }) }] } });
+    await order;
+    expect(p.get('seal').textContent).toBe('VERIFYING');
+    expect(p.get('log').children).toHaveLength(lines);
+    expect(p.get('authorization-panel').hidden).toBe(true);
+  });
+
+  it('does not initiate revocation using a grant returned by an old pre-reset state read', async () => {
+    const p = await projector(); const url = 'http://localhost:4950/api/rp/state';
+    let finish!: (value: unknown) => void;
+    p.state.responses[url] = new Promise(resolve => { finish = resolve; });
+    const revoking = p.get('btn-revoke').onclick!();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    delete p.state.responses[url];
+    p.emit('/api/events', { type: 'reset', ...reset });
+    finish({ grantIssued: true, activeIndex: 94, keyRequired: false }); await revoking;
+    expect(p.state.posts.some(post => post.url.includes('/api/rp/revoke'))).toBe(false);
+    expect(p.get('verdict-code').textContent).toBe('NO_GRANT');
+    expect(p.get('btn-revoke').disabled).toBe(true);
+  });
+
+  it('does not repopulate the fresh audit count from an older merchant state response', async () => {
+    const p = await projector(); let finish!: (value: unknown) => void;
+    p.state.responses['/api/state'] = new Promise(resolve => { finish = resolve; });
+    p.emit('/api/events', { type: 'audit', entries: 4, rootDigest: 'sha256:old', treeSize: 4 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    delete p.state.responses['/api/state'];
+    p.emit('/api/events', { type: 'reset', ...reset });
+    finish({ audit: { entries: 4, profile: 'AAP-2', delivery: 'sync', ledger: { ledgerId: 'old' } } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get('audit-n').innerHTML).toBe('0 <small>ENTRIES</small>');
+    expect(p.get('audit-root').textContent).toBe('');
+  });
+});

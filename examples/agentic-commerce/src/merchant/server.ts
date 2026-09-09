@@ -86,11 +86,12 @@ import { CATALOG } from '../lib/product.js';
 import { buildDiscoveryDocument } from './well-known.js';
 import { evaluateOrder, allocateOrderId, summarizeMandate, type Mandate, type ApprovedOrderQuote } from './place-order.js';
 import type { MerchantToolResult } from '../agent/authorization.js';
-import { discover, runAgentOrder } from '../agent/agent.js';
+import { discover, runAgentOrder, serializeAgentOperation } from '../agent/agent.js';
 import { createGatewayServer } from '../agent/gateway.js';
 import { handleStatelessMcp } from '../lib/stateless-mcp.js';
 import { ResponseProofContext } from '../lib/response-proof-context.js';
 import { mountCommerce, x402McpResult } from '../commerce/mount.js';
+import { RunBoundary } from '../lib/run-boundary.js';
 
 export interface MerchantAppConfig {
   identity: KeyedIdentity;
@@ -209,6 +210,7 @@ export function checksFromOutcome(verdict: 'allowed' | 'denied', code: string | 
 
 export async function createMerchant(config: MerchantAppConfig) {
   const { identity } = config;
+  const runBoundary = new RunBoundary();
 
   // ---- outbound trust: the RP's DID document + revocation list ----------------
   const rpDidUrl = didWebToUrl(config.rpDid);
@@ -397,7 +399,10 @@ export async function createMerchant(config: MerchantAppConfig) {
   }
 
   /** All transports share these authority checks before invoking a server-owned effect. */
-  async function executeOrder(a: Record<string, unknown>, execution?: OrderExecution): Promise<MerchantToolResult> {
+  function executeOrder(a: Record<string, unknown>, execution?: OrderExecution): Promise<MerchantToolResult> {
+    return runBoundary.operation(() => executeOrderInRun(a, execution));
+  }
+  async function executeOrderInRun(a: Record<string, unknown>, execution?: OrderExecution): Promise<MerchantToolResult> {
     const sessionId = await responseProofContext.getSessionId();
     const started = Date.now();
     broadcast({ type: 'request', tool: 'place_order', product: String(a['product'] ?? ''), quantity: Number(a['quantity'] ?? 1), agentDid: (a['_kyaos_delegation'] as DelegationCredential | undefined)?.credentialSubject?.id ?? null });
@@ -503,7 +508,7 @@ export async function createMerchant(config: MerchantAppConfig) {
       ],
     }));
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, (request) => runBoundary.operation(async () => {
       const { name, arguments: args = {} } = request.params;
       if (name === '_kyaos') return kyaos.handleKyaOs(args as Record<string, unknown>);
       if (name === 'get_catalog') return catalogHandler({}, await responseProofContext.getSessionId());
@@ -528,12 +533,23 @@ export async function createMerchant(config: MerchantAppConfig) {
         return executeOrder(a);
       }
       return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
-    });
+    }));
     return server;
   }
 
   // ---- discovery + act API + static console (Hono) -------------------------------
   const app = new Hono();
+  // Keep every merchant operation and its audit responses inside one run.
+  // Gateway requests acquire the shared wallet queue before calling /mcp, so
+  // never hold this boundary around /agent/mcp or /api/act/order themselves.
+  app.use('*', async (c, next) => {
+    const route = c.req.path;
+    const observesRun = route === '/api/state' || route.startsWith('/api/audit/')
+      || route.startsWith('/api/receipt/') || route.startsWith('/payments/')
+      || route.startsWith('/ucp/') || route.startsWith('/checkout/')
+      || ['/api/act/audit', '/api/act/tamper', '/api/act/export', '/api/act/verify-receipt'].includes(route);
+    return observesRun ? runBoundary.operation(next) : next();
+  });
   const discovery = buildDiscoveryDocument({ serverDid: identity.did, name: config.name, currency: 'CHF' });
   const commerceOrigin = config.origin ?? env('MERCHANT_ORIGIN', `http://localhost:${config.port}`);
   const commerce = flag('COMMERCE_PAYMENTS') ? mountCommerce(app, {
@@ -556,7 +572,9 @@ export async function createMerchant(config: MerchantAppConfig) {
         outcome: 'succeeded', correlationId: String(event['checkoutId']),
         resource: { kind: 'keyed_commitment', value: consentDigest(event), keyId: 'checkout-payment-evidence' }, evidence: [],
         details: event['phase'] === 'authorized' ? { family: 'authorization', phase: 'approved' }
-          : { family: 'tool', phase: 'completed', attempt: String(event['checkoutId']), idempotencyRef: String(event['termsDigest']) },
+          // The SDK attempt is a decimal counter, not a checkout identifier.
+          // One committed payment is correlated by checkoutId above.
+          : { family: 'tool', phase: 'completed', attempt: '1', idempotencyRef: String(event['termsDigest']) },
       });
       broadcast({ type: 'payment', ...event });
     },
@@ -617,6 +635,8 @@ export async function createMerchant(config: MerchantAppConfig) {
   app.post('/api/act/audit', async (c) => {
     const started = Date.now();
     try {
+      // A fresh run has no checkpoint to sign. Show its honest empty report.
+      if ((await audit.entries()).length === 0) return c.json(await audit.report());
       const a = await audit.anchor();
       const report = await audit.report();
       broadcast({ type: 'audit', created: a.created, treeSize: a.checkpoint.core.treeSize, rootDigest: a.checkpoint.core.rootDigest, checkpointDigest: a.checkpoint.checkpointDigest, witnessed: !!a.witness, witnessError: a.witnessError, entries: report.entries.length, allIncluded: report.allIncluded, chainIntact: report.chainIntact, elapsedMs: Date.now() - started });
@@ -689,8 +709,16 @@ export async function createMerchant(config: MerchantAppConfig) {
     }
   });
 
-  app.post('/api/act/reset', async (c) => {
-    // Start a fresh consent ceremony. Reset never issues authority.
+  app.post('/api/act/reset', (c) => serializeAgentOperation(() => runBoundary.exclusive(async () => {
+    // Drain gateway pickup first, then merchant effects/audit actions. Reversing
+    // this lock order would deadlock a gateway waiting for its own /mcp call.
+    // Archive before resetting authority; failure leaves the current run intact.
+    let nextRun: Awaited<ReturnType<typeof audit.prepareNewRun>>;
+    try {
+      nextRun = await audit.prepareNewRun();
+    } catch {
+      return c.json({ error: 'AUDIT_ARCHIVE_FAILED', message: 'The previous signed audit could not be archived. Start over was not applied; the current grant and audit remain unchanged.' }, 503);
+    }
     let res: Response;
     let issued: Record<string, unknown>;
     try {
@@ -706,13 +734,21 @@ export async function createMerchant(config: MerchantAppConfig) {
       message: typeof issued['message'] === 'string' ? issued['message'] : `The authorization host did not confirm reset (HTTP ${res.status}). The local grant remains unchanged.`,
       upstreamStatus: res.status,
     }, 502);
-    clearAgentState();
+    try { clearAgentState(); }
+    catch {
+      return c.json({ error: 'RESET_WALLET_FAILED', authorityReset: true,
+        message: 'The authorization host reset the grant, but the demo wallet could not be cleared. The merchant audit is retained. Retry Start over after fixing wallet storage.' }, 503);
+    }
+    nextRun.commit();
     statusListResolver.invalidateCache();
     lastMandate = null;
+    lastReceipt = null;
+    orders = 0;
     authorizationChallenge = null;
-    broadcast({ type: 'reset', index: issued['index'] ?? null });
-    return c.json(issued);
-  });
+    const freshAudit = { auditRunId: nextRun.ledger.ledgerEpochId, archivedAudit: nextRun.archive };
+    broadcast({ type: 'reset', index: issued['index'] ?? null, ...freshAudit });
+    return c.json({ ...issued, ...freshAudit });
+  })));
 
   app.get('/api/receipt/last', (c) => (lastReceipt ? c.json(lastReceipt) : c.json({ error: 'no receipt yet — place an order first' }, 404)));
 

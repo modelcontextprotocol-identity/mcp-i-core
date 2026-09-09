@@ -206,20 +206,9 @@ describe('the stage, beat by beat', () => {
     expect(r.reason).toMatch(/revoked/i);
   });
 
-  it('R · reset clears authority; another human approval is required', async () => {
-    const res = await fetch(`http://localhost:${MERCHANT_PORT}/api/act/reset`, { method: 'POST' });
-    const j = (await res.json()) as { index: number };
-    expect(res.ok).toBe(true);
-    expect((await fetch(`http://localhost:${RP_PORT}/api/rp/delegation`)).status).toBe(404);
-    const challenge = await order('risotto', 1);
-    expect(challenge.code).toBe('needs_authorization');
-    expect((await consent(challenge.body as unknown as Challenge, 'approve')).ok).toBe(true);
-    expect((await order('risotto', 1)).denied).toBe(false);
-  });
-
   it('A · every beat is in the ledger; the checkpoint is signed by the merchant and witnessed by the RP', async () => {
     const res = await fetch(`http://localhost:${MERCHANT_PORT}/api/act/audit`, { method: 'POST' });
-    const r = (await res.json()) as { entries: Array<{ eventType: string; outcome: string; reason: string | null; anchored: boolean }>; checkpoint: { treeSize: string; rootDigest: string } | null; witness: { observer: { did: string } } | null; witnessError: string | null; chainIntact: boolean; allIncluded: boolean; unanchored: number; profile: { advertised: string }; tree: unknown[] };
+    const r = (await res.json()) as { ledger: { ledgerId: string; ledgerEpochId: string }; entries: Array<{ eventType: string; outcome: string; reason: string | null; anchored: boolean }>; checkpoint: { treeSize: string; rootDigest: string } | null; witness: { observer: { did: string } } | null; witnessError: string | null; chainIntact: boolean; allIncluded: boolean; unanchored: number; profile: { advertised: string }; tree: unknown[] };
     expect(res.status).toBe(200);
     expect(r.chainIntact).toBe(true);
     expect(r.allIncluded).toBe(true);
@@ -244,7 +233,7 @@ describe('the stage, beat by beat', () => {
     expect(types).toContain('delegation.rejected');      // K → 4
     expect(r.witnessError).toBeNull();
     expect(r.witness?.observer.did).toBe(process.env['RP_DID']);
-    const latest = (await (await fetch(`http://localhost:${RP_PORT}/api/rp/audit/latest?ledgerId=${encodeURIComponent('kya:merchant:' + merchantDid.slice(-8).toLowerCase() + ':orders')}&ledgerEpochId=epoch-${new Date().toISOString().slice(0, 10)}`)).json()) as { observations: number; latest: { checkpoint: { core: { rootDigest: string } } } | null };
+    const latest = (await (await fetch(`http://localhost:${RP_PORT}/api/rp/audit/latest?ledgerId=${encodeURIComponent(r.ledger.ledgerId)}&ledgerEpochId=${encodeURIComponent(r.ledger.ledgerEpochId)}`)).json()) as { observations: number; latest: { checkpoint: { core: { rootDigest: string } } } | null };
     expect(latest.observations).toBe(1);
     expect(latest.latest?.checkpoint.core.rootDigest).toBe(r.checkpoint?.rootDigest);
   });
@@ -306,6 +295,22 @@ describe('the stage, beat by beat', () => {
     expect(badReport.dimensions['chain']).toBe('invalid');
     expect(badReport.dimensions['checkpoint']).toBe('invalid');
     expect(badReport.dimensions['entries']).toBe('valid');
+  });
+
+  it('R · Start over clears the audit and authority; another human approval is required', async () => {
+    const res = await fetch(`http://localhost:${MERCHANT_PORT}/api/act/reset`, { method: 'POST' });
+    const j = (await res.json()) as { auditRunId: string; archivedAudit: { entries: number } };
+    expect(j.auditRunId).toBeTruthy();
+    expect(j.archivedAudit.entries).toBeGreaterThan(0);
+    const freshAudit = await (await fetch(`http://localhost:${MERCHANT_PORT}/api/audit/ledger`)).json();
+    expect(freshAudit.entries).toEqual([]);
+    expect(freshAudit.ledger.ledgerEpochId).toBe(j.auditRunId);
+    expect(res.ok).toBe(true);
+    expect((await fetch(`http://localhost:${RP_PORT}/api/rp/delegation`)).status).toBe(404);
+    const challenge = await order('risotto', 1);
+    expect(challenge.code).toBe('needs_authorization');
+    expect((await consent(challenge.body as unknown as Challenge, 'approve')).ok).toBe(true);
+    expect((await order('risotto', 1)).denied).toBe(false);
   });
 
   it('the hub going down fails CLOSED: status unresolvable → refused', async () => {

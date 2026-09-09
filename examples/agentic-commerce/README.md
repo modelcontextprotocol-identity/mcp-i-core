@@ -57,9 +57,15 @@ npm run demo:restart
 
 Stop the previous demo with `Ctrl+C` first.
 This command checks for occupied demo ports before changing state, prepares a fresh run, then starts both services.
-`R` on the console revokes the current RP grant, clears the gateway’s own grant cache and invalidates pending consent sessions without restarting the services.
+**Start over** (`R`) revokes the current RP grant, clears the gateway’s own grant cache and invalidates pending consent sessions without restarting the services.
+It also archives the complete signed merchant audit under `var/audit/archives/run-<id>/` and starts an empty audit with a new unique epoch.
+Hosted archives use the existing `DEMO_VAR_DIR` volume; no new environment variables are required.
+The current audit overlay, receipt and visible activity clear after reset succeeds.
+Orders and audit operations already in progress finish before the run changes.
+If the archive cannot be written or the authorization host refuses reset, the current merchant audit and wallet remain intact and the console shows the error.
 It never issues a replacement grant; the next request needs human approval.
 It preserves payment attempts, the payment wallet and merchant checkout history, so resetting consent cannot erase an unresolved settlement.
+The authorization host retains its separate consent history, and registered passkeys remain available.
 Restarting starts a fresh merchant in-memory ledger; the RP replays retained consent events into a new ledger epoch.
 If using Google, sign in after the final restart: Google sessions and pending logins are intentionally in memory; account references and registered keys persist.
 
@@ -147,7 +153,7 @@ The console buttons are another deterministic MCP client:
 | `A` | Anchor and witness the audit ledger. |
 | `T` | Open the insider editor; choose an entry and outcome, then Done verifies the edited copy. |
 | `E` | Export honest and tampered bundles and verification reports. |
-| `R` | Clear the active grant; require fresh human consent. |
+| `R` | Start over: archive and clear the merchant audit, reset the grant, and require fresh human consent. |
 | `P` / `C` | Presenter mode / higher contrast. |
 | `Esc` | Close the audit overlay. |
 
@@ -336,6 +342,11 @@ It covers a fresh agent, proof-bound authorization URL, real consent HTML, selec
 The existing product boundary, resolver fail-closed and holder-binding checks remain in place.
 The seven projector gates distinguish signature, holder, consent, scope, cap, revocation and order decisions.
 The projector tests execute the page's actual SSE handlers for absent grants, safe consent links, approval, denial and reset.
+Monitor tabs share one event connection per endpoint through a versioned SharedWorker.
+Fatal closed connections are recreated automatically, preserving subscribers and backing off from 500 milliseconds to 10 seconds; native transient retries continue normally.
+After deploying this worker update, reload open monitor tabs once to load the new worker version.
+`python3 scripts/test-event-streams-browser.py --outdir /tmp/commerce-event-streams` exercises transient disconnects, fatal HTTP 503 responses and incorrect content types in real Chromium with multiple tabs.
+The fallback for browsers without SharedWorker still uses native EventSource; after a fatal connection failure, reload those browsers to reconnect.
 
 After the live flow, press `E` to write the replay bundles to `var/audit/`, then:
 

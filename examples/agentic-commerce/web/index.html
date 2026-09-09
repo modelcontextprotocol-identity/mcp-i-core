@@ -148,7 +148,7 @@
     <button class="act" id="btn-steal" title="Stolen credential · [5] · wrong key">Stolen credential<span class="key">5</span></button>
     <button class="act danger" id="btn-revoke" title="Revoke grant · [K]">Revoke grant<span class="key">K</span></button>
     <button class="act" id="btn-verify" title="Verify receipt · [V]">Verify receipt<span class="key">V</span></button>
-    <button class="act" id="btn-reset" title="Start over · [R] · revoke the current grant, clear it from the demo wallet and request fresh consent">Start over<span class="key">R</span></button>
+    <button class="act" id="btn-reset" title="Start over · [R] · archive this merchant run, clear the demo wallet and request fresh consent. RP history is retained.">Start over<span class="key">R</span></button>
   </div>
 </section>
 </main>
@@ -219,6 +219,10 @@
   const $ = (id) => document.getElementById(id);
   const seal = $('seal'), log = $('log'), rpLog = $('rp-log');
   let busy = false, lastRevoked, stateCache = {}, rpCache = {}, rpOrigin = null, pendingAuthorization = null, pendingCheckout = null;
+  // A confirmed run cutover invalidates all outstanding work in this monitor.
+  // The HTTP response and SSE notification name the same run and may arrive in either order.
+  let merchantRunGeneration = 0;
+  const appliedResetRuns = new Set();
 
   const GATES = [
     ['signature', 'Signature · window · audience'], ['revocation', 'Revocation'], ['holder', 'Holder key'],
@@ -379,6 +383,7 @@
     busy = b;
     document.querySelectorAll('button.act').forEach((x) => { x.disabled = b; });
     $('btn-revoke').disabled = b || !rpCache.grantIssued;
+    $('audit-edit').disabled = b || !editableAuditRows().length;
   }
   async function api(path, opts, base = '', signal = AbortSignal.timeout(30_000)) {
     const res = await fetch(base + path, { cache: 'no-store', method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: opts ? JSON.stringify(opts) : undefined, signal });
@@ -584,7 +589,7 @@
       const st = s.statusList || {};
       $('rp-list').textContent = `${st.url || '—'} · checked ${st.checkedAt} · unresolvable → ${st.onUnresolvable}`;
       renderAuditStrip(s.audit);
-    } catch (err) { line(`merchant state failed: ${esc(err.message)}`, 'kill-line'); }
+    } catch (err) { if (version === merchantRefreshVersion) line(`merchant state failed: ${esc(err.message)}`, 'kill-line'); }
   }
 
   async function refreshRp() {
@@ -695,7 +700,7 @@
     if (typeof SharedWorker === 'undefined') return new EventSource(path);
     try {
       if (!sharedEvents) {
-        sharedEvents = new SharedWorker('/event-streams.js', { name: 'merchant-monitor-events-v1' });
+        sharedEvents = new SharedWorker('/event-streams.js?v=2', { name: 'merchant-monitor-events-v2' });
         sharedEvents.port.onmessage = ({ data }) => {
           const client = eventClients.get(data.url);
           if (client) client['on' + data.type]?.({ data: data.data });
@@ -798,10 +803,7 @@
         }
         refresh();
       } else if (e.type === 'reset') {
-        hideAuthorization(); renderNoGrant();
-        line('Agent grant cleared. The next order requires a fresh human consent decision.', 'warn-line');
-        setSeal('ready'); setGates(''); setCode('NO GRANT · HUMAN CONSENT REQUIRED', 'amber'); $('latency').textContent = '';
-        refresh();
+        applyMerchantReset(e);
       } else if (e.type === 'crosscheck') {
         const el = $('crosscheck');
         const r = e.report || {};
@@ -955,6 +957,19 @@
     $('audit-foot').hidden = false;
     $('audit-title').className = 'title'; $('audit-title').innerHTML = 'AUDIT <span class="cut">TRAIL</span>';
     $('audit-ledger-id').textContent = `${r.ledger.ledgerId} · ${r.ledger.ledgerEpochId}`;
+    if (!r.entries.length) {
+      $('audit-table').innerHTML = '<div class="muted">No merchant decisions in this run yet. Ask the agent to place an order to begin.</div>';
+      $('audit-chain-note').textContent = '0 entries · fresh run';
+      $('audit-chain-note').className = 'muted';
+      $('audit-cp').innerHTML = '<dt>checkpoint</dt><dd>No checkpoint yet</dd>';
+      for (const id of ['audit-cp-note', 'audit-tree-root', 'audit-tree', 'audit-tamper', 'audit-export', 'audit-verdict-note']) $(id).innerHTML = '';
+      $('audit-tree-note').textContent = 'No leaves yet'; $('audit-tree-note').className = 'muted';
+      $('audit-verdicts').innerHTML = '<div class="muted">Record a merchant decision before creating a checkpoint, editing a copy or exporting evidence.</div>';
+      $('audit-tamper-box').style.display = 'none';
+      $('audit-edit').disabled = true;
+      $('audit-foot').hidden = true;
+      return;
+    }
     renderLedgerTable(r, null);
     const cp = r.checkpoint || {};
     const w = r.witness;
@@ -1011,6 +1026,7 @@
 
   async function actAudit() {
     if (busy) return; setBusy(true);
+    const generation = merchantRunGeneration;
     const overlay = $('audit-overlay'), status = $('audit-status');
     // A report may have arrived after the last view was closed. Paint that
     // cached snapshot now, before refreshing its checkpoint and witness.
@@ -1026,20 +1042,24 @@
     $('audit-foot').hidden = !auditReport;
     try {
       const r = await api('/api/act/audit', {});
+      if (generation !== merchantRunGeneration) return;
       if (r.error) throw new Error(r.error);
       // An in-flight request must not pull the presenter back into a dismissed overlay.
       if (overlay.classList.contains('on')) renderAudit(r);
       else { auditReport = r; auditTamper = null; }
     } catch (err) {
+      if (generation !== merchantRunGeneration) return;
       status.className = 'audit-status kill-line';
       status.textContent = `Audit could not be refreshed: ${err.message}. Close this view and choose Show audit to retry.${auditReport ? ' The previous snapshot remains below.' : ''}`;
       line(`anchor failed: ${esc(err.message)}`, 'kill-line');
     } finally {
-      overlay.setAttribute('aria-busy', 'false');
-      setBusy(false);
-      const openEditor = auditEditRequested;
-      auditEditRequested = false;
-      if (openEditor && auditReport && status.hidden && overlay.classList.contains('on')) openAuditEditor();
+      if (generation === merchantRunGeneration) {
+        overlay.setAttribute('aria-busy', 'false');
+        setBusy(false);
+        const openEditor = auditEditRequested;
+        auditEditRequested = false;
+        if (openEditor && auditReport && status.hidden && overlay.classList.contains('on')) openAuditEditor();
+      }
     }
   }
   const editableAuditRows = () => auditReport?.checkpoint?.checkpointDigest
@@ -1108,6 +1128,7 @@
   async function submitAuditEdit(event) {
     event.preventDefault();
     if (busy || !auditEditing) return;
+    const generation = merchantRunGeneration;
     const row = editableAuditRows().find(row => row.seq === $('audit-edit-entry').value);
     const outcome = $('audit-edit-outcome').value;
     if (!row || !AUDIT_OUTCOMES.includes(outcome) || row.outcome === outcome) return;
@@ -1119,32 +1140,84 @@
     feedback.textContent = 'Verifying the edited copy against the original signed checkpoint…';
     try {
       const result = await api('/api/act/tamper', request);
+      if (generation !== merchantRunGeneration) return;
       if (result.error) throw new Error(result.error);
       if (result.target?.seq !== request.sequence || result.target?.after !== request.outcome) throw new Error('The result does not match the selected edit. Refresh Show audit before trying again.');
       renderTamper(result);
     } catch (err) {
+      if (generation !== merchantRunGeneration) return;
       feedback.className = 'audit-edit-feedback kill-line';
       feedback.textContent = `Edit could not be verified: ${err.message}`;
     } finally {
-      $('audit-overlay').setAttribute('aria-busy', 'false');
-      setBusy(false); syncAuditEditor();
+      if (generation === merchantRunGeneration) {
+        $('audit-overlay').setAttribute('aria-busy', 'false');
+        setBusy(false); syncAuditEditor();
+      }
     }
   }
   async function actExport() {
     if (busy) return; setBusy(true);
+    const generation = merchantRunGeneration;
     try {
-      if (!auditReport) { const r = await api('/api/act/audit', {}); if (r.error) { line(`anchor: ${esc(r.error)}`, 'warn-line'); setBusy(false); return; } renderAudit(r); }
-      const e = await api('/api/act/export', {}); if (e.error) line(`export: ${esc(e.error)}`, 'warn-line'); else renderExport(e);
-    } catch (err) { line(`export failed: ${esc(err.message)}`, 'kill-line'); }
-    setBusy(false);
+      if (!auditReport) {
+        const r = await api('/api/act/audit', {});
+        if (generation !== merchantRunGeneration) return;
+        if (r.error) throw new Error(r.error);
+        renderAudit(r);
+      }
+      if (!auditReport.entries.length) {
+        $('audit-status').hidden = false;
+        $('audit-status').className = 'audit-status warn-line';
+        $('audit-status').textContent = 'No entries to export. Run an order first, then choose Show audit.';
+        return;
+      }
+      const e = await api('/api/act/export', {});
+      if (generation !== merchantRunGeneration) return;
+      if (e.error) throw new Error(e.error);
+      renderExport(e);
+    } catch (err) {
+      if (generation === merchantRunGeneration) line(`export failed: ${esc(err.message)}`, 'kill-line');
+    } finally {
+      if (generation === merchantRunGeneration) setBusy(false);
+    }
   }
   const closeAudit = () => { auditEditing = false; auditEditRequested = false; $('audit-editor').hidden = true; $('audit-overlay').classList.remove('on'); };
+
+  function applyMerchantReset(result) {
+    if (result.auditRunId && appliedResetRuns.has(result.auditRunId)) return;
+    if (result.auditRunId) appliedResetRuns.add(result.auditRunId);
+    merchantRunGeneration++;
+    merchantRefreshVersion++; rpRefreshVersion++;
+    auditReport = null; auditTamper = null;
+    closeAudit();
+    $('audit-overlay').setAttribute('aria-busy', 'false');
+    for (const id of ['audit-status', 'audit-body', 'audit-foot']) $(id).hidden = true;
+    for (const id of ['audit-table', 'audit-export', 'audit-verdicts', 'audit-cp', 'audit-tree', 'audit-tamper', 'audit-edit-entry', 'audit-edit-outcome']) $(id).innerHTML = '';
+    for (const id of ['audit-ledger-id', 'audit-chain-note', 'audit-tamper-note', 'audit-cp-note', 'audit-tree-root', 'audit-tree-note', 'audit-verdict-note', 'audit-root', 'audit-meta', 'audit-edit-before', 'audit-edit-feedback']) $(id).textContent = '';
+    $('audit-tamper-box').style.display = 'none';
+    $('audit-n').innerHTML = '0 <small>ENTRIES</small>';
+    $('audit-pill').textContent = 'empty'; $('audit-pill').className = 'pill';
+    stateCache = { ...stateCache, authorizationChallenge: null, lastReceipt: null, lastMandate: null, orders: 0, audit: null };
+    rpCache = { ...rpCache, grantIssued: false, activeIndex: null };
+    revocationPrompt?.abort(); hideKey();
+    hideAuthorization(); renderNoGrant();
+    $('receipt').innerHTML = '<div class="dim-line">Every allowed response is signed by the merchant’s key. Its receipt can be verified by any party.</div>';
+    log.replaceChildren();
+    line(result.archivedAudit
+      ? 'Previous merchant run archived. Fresh run ready; RP consent history retained.'
+      : 'Fresh merchant run ready. The next order requires human consent; RP history retained.', 'info-line');
+    setSeal('ready'); setGates(''); setCode('NO GRANT · HUMAN CONSENT REQUIRED', 'amber'); $('latency').textContent = '';
+    setBusy(false); syncAuditEditor();
+    refresh();
+  }
 
   // ── triggers (simulated agent). SSE renders the outcome. ──────────────────────
   async function trigger(path, opts) {
     if (busy) return; setBusy(true);
+    const generation = merchantRunGeneration;
     try {
       const r = await api(path, opts ?? {});
+      if (generation !== merchantRunGeneration) return;
       if (r && r.error && !r.result) line(`${esc(path)}: ${esc(r.error)}`, 'kill-line');
       // Pending consent can come from the agent's previously verified challenge
       // after a reconnect, without producing another merchant SSE event.
@@ -1155,21 +1228,26 @@
       }
     }
     catch (err) {
+      if (generation !== merchantRunGeneration) return;
       if (err.name === 'TimeoutError') {
         setSeal('unknown'); setCode('REQUEST OUTCOME UNKNOWN', 'amber');
         line('Request timed out. Outcome unknown; check the live events before retrying.', 'warn-line');
       } else line(`${esc(path)} failed: ${esc(err.message)}`, 'warn-line');
     }
-    setBusy(false);
+    finally { if (generation === merchantRunGeneration) setBusy(false); }
   }
   async function actReset() {
     if (busy) return; setBusy(true);
+    const generation = merchantRunGeneration;
     try {
       const r = await api('/api/act/reset', {});
-      if (r.error) throw new Error(r.message || r.error);
-      $('receipt').innerHTML = '<div class="dim-line">every allowed response is signed by the merchant\'s key — a receipt any party can verify</div>';
-    } catch (err) { line(`reset failed: ${esc(err.message)}`, 'kill-line'); }
-    setBusy(false);
+      if (r?.success !== true || r.error) throw new Error(r?.message || r?.error || 'The server did not confirm reset. The current run remains visible.');
+      // A matching SSE can confirm the cutover before this response arrives.
+      // Its run id prevents that delayed response from clearing newer activity.
+      if (generation === merchantRunGeneration) applyMerchantReset(r);
+    } catch (err) {
+      if (generation === merchantRunGeneration) line(`reset failed: ${esc(err.message)}`, 'kill-line');
+    } finally { if (generation === merchantRunGeneration) setBusy(false); }
   }
 
   // ── key-gated revocation (WebAuthn). Native ceremony, no library. ─────────────
@@ -1185,17 +1263,19 @@
     setCode(result.audit === 'unavailable' ? 'GRANT REVOKED · AUDIT EXPORT PENDING' : 'GRANT REVOKED', 'red');
     if (result.audit === 'unavailable') line('Revocation is published. RP audit export needs a retry.', 'warn-line');
   }
-  async function reconcileRevocationFailure(index, message) {
+  async function reconcileRevocationFailure(index, message, generation = merchantRunGeneration) {
     // A lost response does not tell us whether publication happened. Read back
     // the same grant before claiming success, and never retry a mutation here.
     try {
       const current = await api('/api/rp/state', undefined, rpOrigin, AbortSignal.timeout(10_000));
+      if (generation !== merchantRunGeneration) return;
       if (index != null && current.activeIndex === index && current.revoked === true) {
         setSeal('kill'); setCode('GRANT REVOKED · AUDIT STATUS UNKNOWN', 'red');
         line('Status readback confirms revocation. The completion response was unavailable.', 'warn-line');
         return;
       }
     } catch { /* Outcome remains unknown; do not leave VERIFYING on screen. */ }
+    if (generation !== merchantRunGeneration) return;
     setSeal('blocked', message || 'Check the grant status before retrying.');
     setCode('REVOCATION NOT CONFIRMED', 'amber');
     line('Revocation not confirmed: ' + esc(message || 'response unavailable'), 'warn-line');
@@ -1204,10 +1284,13 @@
   async function revokeAction() {
     if (busy || !rpOrigin) return;
     setBusy(true);
+    const generation = merchantRunGeneration;
     let index = null;
     try {
       // Fetch the current grant and configuration, including changes after restart.
-      rpCache = await revokeRequest('/api/rp/state');
+      const current = await revokeRequest('/api/rp/state');
+      if (generation !== merchantRunGeneration) return;
+      rpCache = current;
       if (!rpCache.grantIssued) {
         setSeal('consent'); setCode('NO GRANT · HUMAN CONSENT REQUIRED', 'amber');
         return;
@@ -1218,6 +1301,7 @@
         result = await revokeRequest('/api/rp/revoke', { index });
       } else {
         const ch = await revokeRequest('/api/rp/revoke/challenge', {});
+        if (generation !== merchantRunGeneration) return;
         if (ch.error) throw new Error(ch.message || ch.error);
         index = ch.intentPreview.index;
         showKey(ch.intentPreview);
@@ -1230,13 +1314,15 @@
         let cred;
         try {
           cred = await navigator.credentials.get({ publicKey, signal: controller.signal });
+          if (generation !== merchantRunGeneration) return;
           if (controller.signal.aborted || !cred) throw new Error('Approval cancelled');
         } catch {
+          if (generation !== merchantRunGeneration) return;
           setSeal('ready', 'Passkey confirmation cancelled. No revocation was sent.');
           setCode('REVOCATION CANCELLED', 'amber');
           line('Passkey confirmation cancelled or timed out. No revocation was sent.', 'warn-line');
           return;
-        } finally { revocationPrompt = null; }
+        } finally { if (revocationPrompt === controller) revocationPrompt = null; }
         // Once signed and submitted, cancelling cannot promise to undo the effect.
         $('key-cancel').disabled = true;
         hideKey();
@@ -1244,16 +1330,18 @@
         const assertion = { id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
           response: { clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData), signature: bufToB64u(r.signature), ...(r.userHandle ? { userHandle: bufToB64u(r.userHandle) } : {}) } };
         result = await revokeRequest('/api/rp/revoke/execute', { nonce: ch.nonce, response: assertion });
+        if (generation !== merchantRunGeneration) return;
         if (!result.error) line(`passkey assertion verified · ${esc(result.authenticator)} (…${esc(result.idTail)})`, 'kill-line');
       }
+      if (generation !== merchantRunGeneration) return;
       if (result.error) throw new Error(result.message || result.error);
       if (result.revoked !== true || result.index !== index) throw new Error('Unexpected revocation response');
       renderRevocationOutcome(result);
       refresh();
     } catch (e) {
-      await reconcileRevocationFailure(index, e.message);
+      if (generation === merchantRunGeneration) await reconcileRevocationFailure(index, e.message, generation);
     } finally {
-      hideKey(); setBusy(false);
+      if (generation === merchantRunGeneration) { hideKey(); setBusy(false); }
     }
   }
 
