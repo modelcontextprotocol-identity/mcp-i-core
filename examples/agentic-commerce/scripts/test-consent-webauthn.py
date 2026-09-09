@@ -118,6 +118,16 @@ async def assert_console_layout(page, output=None, screenshot_name=None):
                 assert visible_in_panel, f'Core delegation field {selector} requires scrolling at {width}x{height}'
         log_box = await page.locator('#log').bounding_box()
         assert log_box['height'] >= 180, f'Log too small at {width}x{height}: {log_box}'
+        if width == 640:
+            # Reproduce the extra footer wrapping from Linux font metrics on
+            # macOS too. The activity viewport must retain its usable height.
+            await page.locator('.controls').evaluate("node => node.style.setProperty('--sans', 'Verdana, sans-serif')")
+            try:
+                wrapped_log = await page.locator('#log').bounding_box()
+                assert wrapped_log['height'] >= 180, f'Wrapped controls squeeze the live log: {wrapped_log}'
+                assert await page.evaluate('document.documentElement.scrollHeight <= innerHeight'), 'Wrapped controls force page scrolling'
+            finally:
+                await page.locator('.controls').evaluate("node => node.style.removeProperty('--sans')")
         sizes = await page.evaluate("""() => ({
           action: parseFloat(getComputedStyle(document.querySelector('#btn-order')).fontSize),
           log: parseFloat(getComputedStyle(document.querySelector('#log')).fontSize),

@@ -240,6 +240,7 @@ body.presenter .log { font-size: 21px; }
   .grant-panel .panel-head { font-size: 16px; }
   .human-grant strong { font-size: 22px; }
   .panel-head { padding-inline: 14px; }
+  .event-panel .panel-head { padding-block: 4px; }
   .controls { gap: 3px; }
   button.act { padding: 6px; }
 }
