@@ -36,6 +36,7 @@ import {
   type AuditTrailService,
   type AuditVerificationPolicyV1,
   type AuditVerificationReportV1,
+  type Digest,
   type PartyRef,
   type SignedAuditCheckpointV1,
   type SignedAuditEntryV1,
@@ -270,6 +271,10 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
 
   async function report(): Promise<AuditReport> {
     const all = await entries();
+    // Each report is one immutable snapshot. The SDK still constructs and
+    // verifies every proof; shared subtree roots avoid hashing the ledger
+    // again for every leaf. The cache is discarded after this report.
+    const reportTree = new SnapshotMerkleTree(hasher);
     const leaves = all.map((e) => e.entryDigest);
     const cp = latest?.checkpoint ?? null;
     const anchoredSize = cp ? Number(cp.core.treeSize) : 0;
@@ -277,12 +282,12 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     const root = cp?.core.rootDigest ?? null;
     const inclusions = [];
     for (let i = 0; i < anchoredLeaves.length; i++) {
-      const auditPath = await tree.inclusionProof(anchoredLeaves, i);
+      const auditPath = await reportTree.inclusionProof(anchoredLeaves, i);
       inclusions.push({
         seq: all[i]!.core.sequence,
         leafIndex: i,
         auditPath: auditPath.map(String),
-        included: root ? await tree.verifyInclusion({ leaf: anchoredLeaves[i]!, leafIndex: i, treeSize: anchoredLeaves.length, root, auditPath }) : false,
+        included: root ? await reportTree.verifyInclusion({ leaf: anchoredLeaves[i]!, leafIndex: i, treeSize: anchoredLeaves.length, root, auditPath }) : false,
       });
     }
     let chainIntact = all.length > 0;
@@ -300,7 +305,7 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
       checkpoint: cp ? { treeSize: cp.core.treeSize, rootDigest: cp.core.rootDigest, checkpointDigest: cp.checkpointDigest, createdAt: cp.core.createdAt, previousCheckpointDigest: cp.core.previousCheckpointDigest, jws: cp.jws } : null,
       witness: w ? { observerId: w.core.observerId, observer: w.core.observer, observedAt: w.core.observedAt, observationDigest: w.observationDigest, checkpointDigest: w.core.checkpointDigest, treeSize: w.core.treeSize } : null,
       witnessError: latest?.witnessError ?? null,
-      tree: anchoredLeaves.length ? await renderTree(tree, anchoredLeaves) : [],
+      tree: anchoredLeaves.length ? await renderTree(reportTree, anchoredLeaves) : [],
       inclusions,
       allIncluded: inclusions.length > 0 && inclusions.every((i) => i.included),
       chainIntact,
@@ -507,23 +512,33 @@ function row(e: SignedAuditEntryV1, anchored: boolean): LedgerRow {
   };
 }
 
+/** Share SDK-computed roots within a single immutable report snapshot. */
+class SnapshotMerkleTree extends Rfc9162MerkleTree {
+  private readonly roots = new Map<string, Promise<Digest>>();
+
+  override root(leaves: readonly Digest[]): Promise<Digest> {
+    // Include every digest in the key, so neither a changed interior leaf nor
+    // a differently sized subtree can reuse another root.
+    const key = leaves.join(',');
+    const cached = this.roots.get(key);
+    if (cached) return cached;
+    const root = super.root(leaves);
+    this.roots.set(key, root);
+    return root;
+  }
+}
+
 /**
  * The RFC 9162 tree over the leaves, flattened into render-ready rows.
  * Faithful to the spec's split rule (§2.1: k = the largest power of two
  * STRICTLY less than n), so the shape is the real one, not a padded balanced
  * tree. The root row's hash equals `Rfc9162MerkleTree.root()`.
  */
-async function renderTree(tree: Rfc9162MerkleTree, leaves: readonly string[]): Promise<TreeRow[]> {
-  type D = `sha256:${string}`;
+async function renderTree(tree: Rfc9162MerkleTree, leaves: readonly Digest[]): Promise<TreeRow[]> {
   const rows: TreeRow[] = [];
   const splitAt = (n: number) => { let p = 1; while (p * 2 < n) p *= 2; return p; };
-  async function node(lo: number, hi: number): Promise<D> {
-    if (hi - lo === 1) return tree.leafHash(leaves[lo] as D);
-    const s = lo + splitAt(hi - lo);
-    return tree.nodeHash(await node(lo, s), await node(s, hi));
-  }
   async function walk(lo: number, hi: number, depth: number, pad: string, connector: string): Promise<void> {
-    const hash = await node(lo, hi);
+    const hash = await tree.root(leaves.slice(lo, hi));
     const prefix = pad + connector;
     if (hi - lo === 1) { rows.push({ depth, prefix, hash, label: `seq ${lo}`, leafIndex: lo }); return; }
     rows.push({ depth, prefix, hash, label: `[${lo}..${hi - 1}]`, leafIndex: null });

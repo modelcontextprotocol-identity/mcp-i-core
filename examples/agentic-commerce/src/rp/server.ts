@@ -102,6 +102,14 @@ export function createRpApp(config: RpAppConfig): Hono {
   const protocol = new ConsentProtocol(identity.did, new URL(config.statusListUrl).origin);
 
   app.use('/api/*', cors({ origin: config.corsOrigins, credentials: identityAuth.enabled }));
+  // The merchant monitor reconciles pending human consent across RP origins.
+  // Consent actions remain same-origin; only this read endpoint is exposed.
+  app.use('/consent/status', cors({
+    origin: config.corsOrigins,
+    credentials: identityAuth.enabled,
+    allowMethods: ['GET'],
+    allowHeaders: ['Content-Type'],
+  }));
   app.use('/status-list', cors({ origin: '*' }));
   app.use('/.well-known/*', cors({ origin: '*' }));
 

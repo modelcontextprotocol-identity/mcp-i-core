@@ -21,6 +21,7 @@ class Element {
   disabled = false;
   href = '';
   title = '';
+  attributes = new Map<string, string>();
   style: Record<string, string> = {};
   children: Element[] = [];
   onclick: ((event?: Partial<MouseEvent>) => unknown) | null = null;
@@ -38,8 +39,9 @@ class Element {
   prepend(child: Element) { this.children.unshift(child); }
   querySelector() { const child = new Element(); this.children.push(child); return child; }
   scrollIntoView() {}
-  removeAttribute(name: string) { if (name === 'href') this.href = ''; }
-  setAttribute(name: string, value: string) { if (name === 'href') this.href = value; }
+  removeAttribute(name: string) { this.attributes.delete(name); if (name === 'href') this.href = ''; }
+  setAttribute(name: string, value: string) { this.attributes.set(name, value); if (name === 'href') this.href = value; }
+  getAttribute(name: string) { return this.attributes.get(name) ?? null; }
 }
 
 // Extract the trusted local fixture script for VM execution, not HTML sanitization.
@@ -86,8 +88,8 @@ describe('local fixture script selection', () => {
 async function projector(initialChallenge?: Record<string, unknown>, credential: unknown = null,
   html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1]!, new Element()]));
-  const streams = new Map<string, { onmessage?: (event: { data: string }) => void }>();
-  const state = { credential, responses: {} as Record<string, unknown> };
+  const streams = new Map<string, { onmessage?: (event: { data: string }) => void; onopen?: () => void }>();
+  const state = { credential, responses: {} as Record<string, unknown>, requests: [] as string[] };
   const get = (id: string) => {
     const element = elements.get(id);
     if (!element) throw new Error(`Missing projector element #${id}`);
@@ -102,13 +104,17 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
       getElementById: get, createElement: () => new Element(),
       body: new Element(), querySelectorAll: () => [], addEventListener: () => {},
     },
-    fetch: async (url: string) => ({ json: async () => Object.hasOwn(state.responses, url)
-      ? state.responses[url] : url.endsWith('/api/state')
+    fetch: async (url: string) => {
+      state.requests.push(url);
+      if (state.responses[url] instanceof Error) throw state.responses[url];
+      return { json: async () => Object.hasOwn(state.responses, url)
+      ? typeof state.responses[url] === 'function' ? (state.responses[url] as () => unknown)() : state.responses[url] : url.endsWith('/api/state')
       ? { responsibleParty: { hubOrigin: 'http://localhost:4950' }, authorizationChallenge: initialChallenge }
       : url.endsWith('/api/rp/state')
         ? { statusList: { version: 1 }, activeIndex: null, revoked: false }
         : url.includes('/consent/status?') ? { state: 'pending' }
-        : { credential: state.credential } }),
+        : { credential: state.credential } };
+    },
     EventSource: class { constructor(url: string) { streams.set(url, this); } },
   });
   vm.runInContext(inlinePageScript(html), context);
@@ -118,7 +124,7 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
     if (!source?.onmessage) throw new Error(`Missing SSE stream ${stream}`);
     source.onmessage({ data: JSON.stringify(data) });
   };
-  return { get, emit, state, open, popup };
+  return { get, emit, state, open, popup, reconnect: (url: string) => streams.get(url)?.onopen?.() };
 }
 
 const attributePayload = `\" onpointerenter=\"globalThis.projectorInjected=1\" data-injected=\"'&<>`;
@@ -145,7 +151,7 @@ describe('revocation terminal feedback', () => {
     p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
     await p.get('btn-revoke').onclick!();
     expect(p.get('seal').textContent).toBe('REVOKED');
-    expect(p.get('verdict-code').textContent).toBe('GRANT REVOKED');
+    expect(p.get('verdict-code').textContent).toBe('GRANT_REVOKED');
   });
 
   it('leaves VERIFYING on failure and does not claim the grant was revoked', async () => {
@@ -155,15 +161,16 @@ describe('revocation terminal feedback', () => {
     p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
     await p.get('btn-revoke').onclick!();
     expect(p.get('seal').textContent).not.toBe('VERIFYING');
-    expect(p.get('verdict-code').textContent).toBe('REVOCATION NOT CONFIRMED');
+    expect(p.get('verdict-code').textContent).toBe('REVOCATION_NOT_CONFIRMED');
   });
 
   it('distinguishes successful publication from an unavailable audit export', async () => {
     const p = await projector();
     p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
     p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_done', index: 94, revoked: true, version: 2, audit: 'unavailable' });
+    expect(p.get('verdict-context').textContent).toBe('AUDIT EXPORT PENDING');
     expect(p.get('seal').textContent).toBe('REVOKED');
-    expect(p.get('verdict-code').textContent).toBe('GRANT REVOKED · AUDIT EXPORT PENDING');
+    expect(p.get('verdict-code').textContent).toBe('GRANT_REVOKED');
   });
 });
 
@@ -275,13 +282,162 @@ const scriptTagVariants = [
   { name: 'browser-accepted closing-tag attributes', closingTag: '</SCRIPT\t\n bar>' },
 ];
 
+describe('projector grant refresh delivery', () => {
+  const rp = 'http://localhost:4950';
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+  it('shows an issued grant without waiting for a stalled merchant state read', async () => {
+    const p = await projector();
+    let release!: (value: unknown) => void;
+    p.state.responses['/api/state'] = new Promise(resolve => { release = resolve; });
+    p.state.credential = namedGrant();
+    p.emit(rp + '/api/rp/events', { type: 'consent.approved', index: 94 });
+    await tick();
+    try {
+      expect(p.get('grant-pill').textContent).toBe('active');
+      expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
+    } finally { release({ responsibleParty: { hubOrigin: rp } }); }
+  });
+
+  it('does not let a delayed pre-approval snapshot erase the issued grant', async () => {
+    const p = await projector();
+    let release!: (value: unknown) => void;
+    let requested = false;
+    const stale = new Promise(resolve => { release = resolve; });
+    p.state.responses[rp + '/api/rp/delegation'] = () => { requested = true; return stale; };
+    p.emit('/api/events', { type: 'reset' });
+    await tick();
+    expect(requested).toBe(true);
+    p.state.responses[rp + '/api/rp/delegation'] = { credential: namedGrant() };
+    p.emit(rp + '/api/rp/events', { type: 'consent.approved', index: 94 });
+    await tick();
+    expect(p.get('grant-pill').textContent).toBe('active');
+    release({ credential: null });
+    await tick();
+    expect(p.get('grant-pill').textContent).toBe('active');
+    expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
+  });
+
+  it.each(['approved', 'denied', 'expired'])('reconciles a pending popup after a missed %s event', async status => {
+    const p = await projector(challenge.body);
+    p.state.responses[rp + '/consent/status?resume_token=' + challenge.body.resumeToken] = { state: status, index: 94 };
+    if (status === 'approved') p.state.credential = namedGrant();
+    p.reconnect(rp + '/api/rp/events');
+    await tick();
+    expect(p.get('authorization-panel').hidden).toBe(true);
+    expect(p.get('verdict-code').textContent).toBe(status === 'approved' ? 'HUMAN_APPROVED' : 'CONSENT_' + status.toUpperCase());
+    expect(p.get('seal').textContent).not.toBe('AUTHORIZED');
+  });
+
+  it('ignores a recovered decision for a challenge replaced while its status was loading', async () => {
+    const p = await projector(challenge.body);
+    let release!: (value: unknown) => void;
+    p.state.responses[rp + '/consent/status?resume_token=' + challenge.body.resumeToken] = new Promise(resolve => { release = resolve; });
+    p.reconnect(rp + '/api/rp/events');
+    await tick();
+    const newer = { ...challenge.body, resumeToken: 'newer-flow', authorizationUrl: rp + '/consent?session_id=newer-flow' };
+    p.emit('/api/events', { ...challenge, body: newer });
+    release({ state: 'approved', index: 94 });
+    await tick();
+    expect(p.get('authorization-panel').hidden).toBe(false);
+    expect(p.get('authorization-link').href).toBe(newer.authorizationUrl);
+    expect(p.get('verdict-code').textContent).toBe('NEEDS_AUTHORIZATION');
+  });
+
+  it('recovers a grant issued while the RP event stream was disconnected', async () => {
+    const p = await projector();
+    p.state.credential = namedGrant();
+    p.reconnect(rp + '/api/rp/events');
+    await tick();
+    expect(p.get('grant-pill').textContent).toBe('active');
+    expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
+  });
+});
+
 describe('projector human-grant journey', () => {
+  it('identifies the W3C credential with a separate Delegation heading inside its frame', () => {
+    const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+    let frame: DefaultTreeAdapterTypes.Element | undefined;
+    function visit(node: DefaultTreeAdapterTypes.Node) {
+      if ('tagName' in node && node.tagName === 'fieldset'
+        && node.attrs.some(attr => attr.name === 'class' && attr.value.split(/\s+/).includes('credential-frame'))) {
+        frame = node;
+      }
+      if ('childNodes' in node) node.childNodes.forEach(visit);
+    }
+    function text(node: DefaultTreeAdapterTypes.Node): string {
+      return 'value' in node ? node.value : 'childNodes' in node ? node.childNodes.map(text).join(' ') : '';
+    }
+    visit(parse(html));
+    expect(frame, 'credential grouping should have native fieldset semantics').toBeDefined();
+    const legend = frame!.childNodes.find(node => 'tagName' in node && node.tagName === 'legend');
+    expect(legend, 'the fieldset should have a legend').toBeDefined();
+    expect(text(legend!).trim()).toBe('W3C Verifiable Credential');
+    const heading = frame!.childNodes.find(node => 'tagName' in node && node.tagName === 'h2');
+    expect(heading, 'the credential type should be a heading inside the frame').toBeDefined();
+    expect(text(heading!).trim()).toBe('Delegation');
+  });
+
+  it('shows every action scope from the signed delegation constraints without inferring the tool name', async () => {
+    const grant = namedGrant();
+    const scopes = ['commerce.order', 'commerce.order.read'];
+    const scoped = { ...grant, credentialSubject: { ...grant.credentialSubject, delegation: {
+      ...grant.credentialSubject.delegation,
+      constraints: { ...grant.credentialSubject.delegation.constraints, scopes },
+      metadata: { ...grant.credentialSubject.delegation.metadata, tool: 'different_tool' },
+    } } };
+    const p = await projector(undefined, scoped);
+    expect(p.get('c-action-scopes').textContent).toBe(scopes.join(' · '));
+    expect(p.get('c-action-scopes').textContent).not.toContain('different_tool');
+  });
+
+  it.each([
+    { label: 'absent', scopes: undefined },
+    { label: 'empty', scopes: [] as string[] },
+  ])('does not invent an action scope for a grant with $label scopes', async ({ scopes }) => {
+    const grant = namedGrant();
+    const scoped = { ...grant, credentialSubject: { ...grant.credentialSubject, delegation: {
+      ...grant.credentialSubject.delegation,
+      constraints: { ...grant.credentialSubject.delegation.constraints, ...(scopes ? { scopes } : {}) },
+      metadata: { ...grant.credentialSubject.delegation.metadata, tool: 'place_order' },
+    } } };
+    const p = await projector(undefined, scoped);
+    expect(p.get('c-action-scopes').textContent).toBe('—');
+  });
+
+  it('clears approved action scopes when the grant is reset', async () => {
+    const grant = namedGrant();
+    const scoped = { ...grant, credentialSubject: { ...grant.credentialSubject, delegation: {
+      ...grant.credentialSubject.delegation,
+      constraints: { ...grant.credentialSubject.delegation.constraints, scopes: ['commerce.order'] },
+    } } };
+    const p = await projector(undefined, scoped);
+    expect(p.get('c-action-scopes').textContent).toBe('commerce.order');
+    p.state.credential = null;
+    p.emit('/api/events', { type: 'reset' });
+    expect(p.get('c-action-scopes').textContent).toBe('—');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get('c-action-scopes').textContent).toBe('—');
+  });
+
+  it('renders scope strings literally rather than interpreting credential data as HTML', async () => {
+    const grant = namedGrant();
+    const scope = '<img src=x onerror=alert(1)>';
+    const scoped = { ...grant, credentialSubject: { ...grant.credentialSubject, delegation: {
+      ...grant.credentialSubject.delegation,
+      constraints: { ...grant.credentialSubject.delegation.constraints, scopes: [scope] },
+    } } };
+    const p = await projector(undefined, scoped);
+    expect(p.get('c-action-scopes').textContent).toBe(scope);
+    expect(p.get('c-action-scopes').innerHTML).toBe('');
+  });
+
   it.each(scriptTagVariants)('executes the actual projector page with $name', async ({ closingTag }) => {
     const html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')
       .replaceAll('<script>', '<SCRIPT>').replaceAll('</script>', closingTag);
     const p = await projector(undefined, namedGrant(), html);
     expect(p.get('c-human').textContent).toBe('Dylan Hobbs');
-    expect(p.get('verdict-code').textContent).toBe('GRANT ACTIVE · READY TO ORDER');
+    expect(p.get('verdict-code').textContent).toBe('GRANT_ACTIVE');
     p.emit('/api/events', { type: 'reset' });
     expect(p.get('grant-pill').textContent).toBe('no grant');
   });
@@ -346,7 +502,35 @@ describe('projector human-grant journey', () => {
     expect(p.get('c-human-authentication').textContent).toContain('RP verified the passkey');
     expect(p.get('c-human-consent').textContent).toContain('consent-reference');
     expect(p.get('c-agent').textContent).toBe('did:key:shopping-agent');
-    expect(p.get('verdict-code').textContent).toBe('GRANT ACTIVE · READY TO ORDER');
+    expect(p.get('verdict-code').textContent).toBe('GRANT_ACTIVE');
+  });
+
+  it('preserves complete identifiers in credential details for both key and web DIDs', async () => {
+    const grant = namedGrant();
+    grant.issuer = 'did:web:authorization.workshop.example:responsible-parties:account';
+    grant.credentialSubject.id = 'did:key:z6MkpiZsrvpx2mJFA7kd6MDMPQMfxmRkqRGX3v6f5WuqzMTjPT';
+    grant.credentialSubject.delegation.constraints.audience = 'did:key:z6MkgrhQVX7j7BNBNBE8rkbqkQi2h9cjJK115XP9n7bkL24N';
+    const p = await projector(undefined, grant);
+    expect(p.get('c-rp').textContent).toBe(grant.issuer);
+    expect(p.get('c-agent').textContent).toBe(grant.credentialSubject.id);
+    expect(p.get('c-aud').textContent).toBe(grant.credentialSubject.delegation.constraints.audience);
+  });
+
+  it('shows the full resolved signing key separately from its source and clears it when unresolved', async () => {
+    const p = await projector();
+    const kid = 'did:web:authorization.workshop.example:responsible-parties:account#key-1';
+    p.state.responses['/api/state'] = { responsibleParty: { hubOrigin: 'http://localhost:4950', resolved: true, kid } };
+    p.emit('/api/events', { type: 'reset' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get('rp-resolved').textContent).toBe('DID document resolved from the network');
+    expect(p.get('rp-resolved-kid').textContent).toBe(kid);
+    expect(p.get('rp-resolved-kid').hidden).toBe(false);
+    p.state.responses['/api/state'] = { responsibleParty: { hubOrigin: 'http://localhost:4950', resolved: false } };
+    p.emit('/api/events', { type: 'reset' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get('rp-resolved-kid').textContent).toBe('');
+    expect(p.get('rp-resolved-kid').hidden).toBe(true);
+    expect(p.get('rp-resolved').textContent).toContain('not resolved');
   });
 
   it('renders provider profile text literally and clears the named relationship on reset', async () => {
@@ -417,7 +601,8 @@ describe('projector human-grant journey', () => {
     p.emit('http://localhost:4950/api/rp/events', { type: 'consent.approved', sessionId: 'human-grant-session', index: 94 });
     expect(p.get('seal').textContent).toBe('GRANT APPROVED');
     expect(p.get('authorization-panel').hidden).toBe(true);
-    expect(p.get('verdict-code').textContent).toContain('RETRY');
+    expect(p.get('verdict-code').textContent).toBe('HUMAN_APPROVED');
+    expect(p.get('verdict-context').textContent).toContain('RETRY');
   });
 
   it('shows human denial without inventing a grant and resets to no consent', async () => {
@@ -429,7 +614,7 @@ describe('projector human-grant journey', () => {
     expect(p.get('authorization-panel').hidden).toBe(true);
     p.emit('/api/events', { type: 'reset' });
     expect(p.get('grant-pill').textContent).toBe('no grant');
-    expect(p.get('verdict-code').textContent).toBe('NO GRANT · HUMAN CONSENT REQUIRED');
+    expect(p.get('verdict-code').textContent).toBe('NO_GRANT');
   });
 });
 
@@ -532,5 +717,190 @@ describe('named consent rendering', () => {
     expect(bridge.human.identitySource).toBe('identity-provider');
     expect(html).toContain('http://localhost:4950/setup-key.html');
     expect(html).toContain('Passkey approval required');
+  });
+});
+
+describe('monitor request timeout recovery', () => {
+  it('shows an unknown outcome and releases controls without automatically retrying an order', async () => {
+    const monitor = await projector();
+    monitor.state.responses['/api/act/order'] = Object.assign(new Error('Timed out'), { name: 'TimeoutError' });
+    await monitor.get('btn-order').onclick!();
+    expect(monitor.get('seal').textContent).toBe('CHECK OUTCOME');
+    expect(monitor.get('verdict-code').textContent).toBe('REQUEST_OUTCOME_UNKNOWN');
+    // A separate explicit operator action still works after the failure.
+    monitor.state.responses['/api/act/discover'] = {};
+    await monitor.get('btn-discover').onclick!();
+    expect(monitor.state.requests.filter(url => url === '/api/act/order')).toHaveLength(1);
+    expect(monitor.state.requests.filter(url => url === '/api/act/discover')).toHaveLength(1);
+  });
+});
+
+describe('stage decision hierarchy', () => {
+  it('keeps grant issuance separate from the merchant accepting an order', async () => {
+    const p = await projector();
+    p.emit('http://localhost:4950/api/rp/events', { type: 'consent.approved', index: 12 });
+    expect(p.get('seal').textContent).toBe('GRANT APPROVED');
+    expect(p.get('seal').className).not.toContain('ok');
+    expect(p.get('decision-label').textContent).toBe('Human authorization');
+    expect(p.get('decision-summary').textContent).toContain('still needs verification');
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_done', index: 12, version: 2 });
+    expect(p.get('seal').textContent).toBe('REVOKED');
+    expect(p.get('decision-label').textContent).toBe('Human authorization');
+    expect(p.get('decision-summary').textContent).toContain('Waiting for the next agent request');
+  });
+
+  it('renders idle readiness as neutral rather than a successful decision', async () => {
+    const p = await projector();
+    p.emit('/api/events', { type: 'reset' });
+    expect(p.get('seal').className).toBe('seal ready');
+    expect(p.get('decision-summary').textContent).toBe('Waiting for an agent request.');
+  });
+});
+
+describe('decision processing feedback', () => {
+  it('indicates processing only while a merchant request is unresolved', async () => {
+    const p = await projector();
+    expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('false');
+    p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+    expect(p.get('seal').textContent).toBe('VERIFYING');
+    expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('true');
+    expect(p.get('decision-icon').innerHTML).toContain('processing-ring');
+    expect(p.get('decision-icon').innerHTML).toContain('processing-dot');
+  });
+
+  it.each([
+    { event: { type: 'verdict', verdict: 'allowed', elapsedMs: 1,
+      body: { ok: true, orderId: 'order-one', order: { name: 'Risotto', product: 'risotto', quantity: 2, unitPrice: '19.90', total: '39.80' } } },
+      headline: 'AUTHORIZED', code: '' },
+    { event: { type: 'verdict', verdict: 'denied', code: 'PRODUCT_OUT_OF_SCOPE', body: { detail: {} } },
+      headline: 'REFUSED', code: 'PRODUCT_OUT_OF_SCOPE' },
+    { event: { type: 'verdict', verdict: 'denied', code: 'SPEND_CAP_EXCEEDED', body: { message: 'Over the approved cap.' } },
+      headline: 'REFUSED', code: 'SPEND_CAP_EXCEEDED' },
+    { event: { type: 'verdict', verdict: 'denied', code: 'delegation_invalid', reason: 'Credential revoked.' },
+      headline: 'DENIED', code: 'CREDENTIAL_REVOKED' },
+    { event: challenge, headline: 'CONSENT NEEDED', code: 'NEEDS_AUTHORIZATION' },
+  ])('reveals $headline / $code synchronously when its result arrives', async ({ event, headline, code }) => {
+    const p = await projector();
+    p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+    p.emit('/api/events', event);
+    // No timer or animation completion advances between the event and these
+    // assertions: motion may decorate the result but must never delay it.
+    expect(p.get('seal').textContent).toBe(headline);
+    expect(p.get('verdict-code').textContent).toBe(code);
+    expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('false');
+    expect(p.get('decision-icon').innerHTML).not.toContain('processing-ring');
+  });
+
+  it('updates consecutive refusals without holding or replaying an older result', async () => {
+    const p = await projector();
+    for (const code of ['PRODUCT_OUT_OF_SCOPE', 'SPEND_CAP_EXCEEDED', 'PRODUCT_OUT_OF_SCOPE']) {
+      p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+      expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('true');
+      p.emit('/api/events', { type: 'verdict', verdict: 'denied', code, body: { detail: {} } });
+      expect(p.get('seal').textContent).toBe('REFUSED');
+      expect(p.get('verdict-code').textContent).toBe(code);
+      expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('false');
+    }
+  });
+
+  it('stops processing on an agent error without inventing a merchant verdict', async () => {
+    const p = await projector();
+    p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+    p.emit('/api/events', { type: 'agent_error', message: 'Connection lost before receipt arrived.' });
+    expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('false');
+    expect(p.get('seal').textContent).toBe('CHECK OUTCOME');
+    expect(p.get('verdict-code').textContent).toBe('REQUEST_OUTCOME_UNKNOWN');
+    expect(p.get('gates').classList.contains('idle')).toBe(true);
+    expect(p.get('gates').children.every(gate => gate.className === 'gate')).toBe(true);
+  });
+
+  it('preserves a settled merchant decision when a later agent error is reported', async () => {
+    const p = await projector();
+    p.emit('/api/events', { type: 'request', product: 'olive-oil', quantity: 1 });
+    p.emit('/api/events', { type: 'verdict', verdict: 'denied', code: 'PRODUCT_OUT_OF_SCOPE', body: { detail: {} } });
+    p.emit('/api/events', { type: 'agent_error', message: 'Could not save the received denial.' });
+    expect(p.get('decision-stage').getAttribute('aria-busy')).toBe('false');
+    expect(p.get('seal').textContent).toBe('REFUSED');
+    expect(p.get('verdict-code').textContent).toBe('PRODUCT_OUT_OF_SCOPE');
+  });
+});
+
+
+describe('prominent decision codes', () => {
+  it('matches the outcome log code and clears stale secondary notes on the next request', async () => {
+    const p = await projector();
+    p.emit('/api/events', { type: 'verdict', verdict: 'denied', code: 'PRODUCT_OUT_OF_SCOPE', body: { detail: {} }, checks: {} });
+    expect(p.get('verdict-code').textContent).toBe('PRODUCT_OUT_OF_SCOPE');
+    expect(p.get('log').children[0]!.children[0]!.innerHTML).toContain('PRODUCT_OUT_OF_SCOPE');
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_done', index: 94, audit: 'unavailable' });
+    expect(p.get('verdict-code').textContent).toBe('GRANT_REVOKED');
+    expect(p.get('verdict-context').textContent).toBe('AUDIT EXPORT PENDING');
+    p.emit('/api/events', { type: 'request', product: 'risotto', quantity: 2 });
+    expect(p.get('verdict-code').textContent).toBe('');
+    expect(p.get('verdict-context').textContent).toBe('');
+  });
+});
+describe('audit loading feedback', () => {
+  it('opens immediately while a checkpoint is pending, then renders the fresh report', async () => {
+    const p = await projector();
+    let finish!: (report: ReturnType<typeof auditFixture>) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const loading = p.get('btn-audit').onclick!();
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(true);
+    expect(p.get('audit-status').hidden).toBe(false);
+    expect(p.get('audit-status').textContent).toContain('Creating the signed checkpoint');
+    expect(p.get('audit-body').hidden).toBe(true);
+    finish(auditFixture());
+    await loading;
+    expect(p.get('audit-status').hidden).toBe(true);
+    expect(p.get('audit-body').hidden).toBe(false);
+    expect(p.get('audit-ledger-id').textContent).toContain('test-ledger');
+  });
+
+  it('does not reopen an audit the presenter dismissed while it loaded', async () => {
+    const p = await projector();
+    let finish!: (report: ReturnType<typeof auditFixture>) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const loading = p.get('btn-audit').onclick!();
+    p.get('audit-close').onclick!();
+    finish(auditFixture());
+    await loading;
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(false);
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const reopening = p.get('btn-audit').onclick!();
+    expect(p.get('audit-ledger-id').textContent).toContain('test-ledger');
+    expect(p.get('audit-body').hidden).toBe(false);
+    finish(auditFixture());
+    await reopening;
+  });
+
+  it('keeps errors visible in the open audit and permits a successful retry', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/audit'] = { error: '<unavailable>' };
+    await p.get('btn-audit').onclick!();
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(true);
+    expect(p.get('audit-status').hidden).toBe(false);
+    expect(p.get('audit-status').textContent).toContain('<unavailable>');
+    expect(p.get('audit-status').innerHTML).not.toContain('<unavailable>');
+    p.state.responses['/api/act/audit'] = auditFixture();
+    await p.get('btn-audit').onclick!();
+    expect(p.get('audit-status').hidden).toBe(true);
+    expect(p.get('audit-table').innerHTML).toContain('table');
+  });
+
+  it('keeps the previous snapshot visible but labels it while refreshing', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/audit'] = auditFixture();
+    await p.get('btn-audit').onclick!();
+    const previous = p.get('audit-table').innerHTML;
+    let finish!: (report: ReturnType<typeof auditFixture>) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const loading = p.get('btn-audit').onclick!();
+    expect(p.get('audit-body').hidden).toBe(false);
+    expect(p.get('audit-table').innerHTML).toBe(previous);
+    expect(p.get('audit-status').textContent).toContain('previous snapshot');
+    finish(auditFixture());
+    await loading;
+    expect(p.get('audit-status').hidden).toBe(true);
   });
 });
