@@ -16,6 +16,7 @@
  */
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import { buildDidWebDocument, type DIDDocument, type VerificationMethod } from '@kya-os/mcp';
@@ -31,6 +32,7 @@ import {
   readJson,
   writeJson,
   type KeyedIdentity,
+  adminTokenOk,
 } from '../lib/wiring.js';
 import path from 'node:path';
 import { isMainModule } from '../lib/main-module.js';
@@ -128,6 +130,15 @@ export function createRpApp(config: RpAppConfig): Hono {
   const protocol = new ConsentProtocol(identity.did, new URL(config.statusListUrl).origin);
 
   app.use('/api/*', cors({ origin: config.corsOrigins, credentials: identityAuth.enabled }));
+  // The presenter's destructive controls. On a laptop the loopback binding is the
+  // boundary; once the hub is public, ADMIN_TOKEN becomes that boundary.
+  const requireAdmin = createMiddleware(async (c, next) => {
+    if (!adminTokenOk(c.req.header('x-admin-token')))
+      return c.json({ error: 'admin_required', message: 'This control is reserved for the presenter.' }, 403);
+    await next();
+  });
+  app.use('/api/rp/reset', requireAdmin);
+  app.use('/api/rp/revoke', requireAdmin);
   // The merchant monitor reconciles pending human consent across RP origins.
   // Consent actions remain same-origin; only this read endpoint is exposed.
   app.use('/consent/status', cors({
@@ -159,6 +170,12 @@ export function createRpApp(config: RpAppConfig): Hono {
   );
 
   if (identityAuth.routes) app.route('/', identityAuth.routes);
+  // The revocation ceremony is served here, not on the console, because a passkey
+  // is scoped to the RP ID it was registered against.
+  app.get('/revoke', (c) => {
+    c.header('Cache-Control', 'no-store');
+    return c.html(fs.readFileSync(path.join(WEB_DIR, 'revoke.html'), 'utf8').replace('__MERCHANT_ORIGIN__', merchantOrigin()));
+  });
   app.get('/setup-key.html', (c) => {
     c.header('Cache-Control', 'no-store');
     return c.html(fs.readFileSync(path.join(WEB_DIR, 'setup-key.html'), 'utf8'));
@@ -323,6 +340,7 @@ export function createRpApp(config: RpAppConfig): Hono {
     setupEnabled: config.keySetup,
     identityAuth,
     ...(identityAuth.enabled ? { registrationOrigin: googleOrigin } : {}),
+    additionalRegistrationOrigins: [merchantOrigin(), rpOrigin()],
     statusListUrl: () => config.statusListUrl,
     currentIndex: revocableIndex,
     performRevoke,

@@ -12,6 +12,7 @@
  * process.cwd(): the Claude Desktop gateway is spawned with an arbitrary cwd.
  */
 import { config as loadDotenv } from 'dotenv';
+import { timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { gzip, gunzip } from 'node:zlib';
@@ -59,6 +60,27 @@ export const RP_DID = env('RP_DID', `did:web:localhost%3A${RP_PORT}`);
 /** Where the RP publishes the revocation list. Any URL; the signature is what is trusted. */
 export const STATUS_LIST_URL = env('STATUS_LIST_URL', `${rpOrigin()}/status-list`);
 export const RP_DID_MIRROR_URL = env('RP_DID_MIRROR_URL', `${rpOrigin()}/.well-known/did.json`);
+
+// --- Hosting -----------------------------------------------------------------
+/** Shared secret the agent gateway requires once it is reachable off this laptop. */
+export const GATEWAY_TOKEN = env('GATEWAY_TOKEN', '');
+/** Shared secret guarding the presenter's destructive console controls. */
+export const ADMIN_TOKEN = env('ADMIN_TOKEN', '');
+/**
+ * Constant-time check for that secret. An unset token means a laptop rehearsal,
+ * where the loopback binding is already the boundary, so the guard stays open.
+ */
+export function adminTokenOk(presented: string | undefined): boolean {
+  if (!ADMIN_TOKEN) return true;
+  const a = Buffer.from(presented ?? '');
+  const b = Buffer.from(ADMIN_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+/** The hostnames a public deployment answers on, taken from its configured origin. */
+export function publicHosts(origin: string): string[] {
+  const url = new URL(origin);
+  return url.port ? [url.host] : [url.host, `${url.hostname}:443`, `${url.hostname}:80`];
+}
 
 export const SCOPE_PRODUCT_CLASS = env('SCOPE_PRODUCT_CLASS', 'https://id.gs1.org/01/09506000134352');
 export const SPEND_CAP = env('SPEND_CAP', '50.00');

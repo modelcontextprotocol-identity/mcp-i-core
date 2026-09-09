@@ -35,6 +35,7 @@ import { spawn } from 'node:child_process';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 import { getRequestListener } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -72,6 +73,11 @@ import {
   loadMerchantIdentity,
   rpOrigin,
   type KeyedIdentity,
+  GATEWAY_TOKEN,
+  ADMIN_TOKEN,
+  adminTokenOk,
+  publicHosts,
+  merchantOrigin,
 } from '../lib/wiring.js';
 import { DemoFetchProvider } from '../lib/mirror-fetch.js';
 import { HttpStatusListResolver, ed25519PublicKeyBase64 } from '../lib/http-statuslist-resolver.js';
@@ -550,6 +556,15 @@ export async function createMerchant(config: MerchantAppConfig) {
       || ['/api/act/audit', '/api/act/tamper', '/api/act/export', '/api/act/verify-receipt'].includes(route);
     return observesRun ? runBoundary.operation(next) : next();
   });
+  // The presenter's destructive controls. On a laptop the loopback binding is the
+  // boundary; once the console is public, ADMIN_TOKEN becomes that boundary.
+  const requireAdmin = createMiddleware(async (c, next) => {
+    if (!adminTokenOk(c.req.header('x-admin-token')))
+      return c.json({ error: 'admin_required', message: 'This control is reserved for the presenter.' }, 403);
+    await next();
+  });
+  app.use('/api/act/reset', requireAdmin);
+  app.use('/api/act/tamper', requireAdmin);
   const discovery = buildDiscoveryDocument({ serverDid: identity.did, name: config.name, currency: 'CHF' });
   const commerceOrigin = config.origin ?? env('MERCHANT_ORIGIN', `http://localhost:${config.port}`);
   const commerce = flag('COMMERCE_PAYMENTS') ? mountCommerce(app, {
@@ -722,7 +737,9 @@ export async function createMerchant(config: MerchantAppConfig) {
     let res: Response;
     let issued: Record<string, unknown>;
     try {
-      res = await fetch(`${config.rpOrigin}/api/rp/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      // Server-to-server, but the hub's guard applies to it too: without the
+      // presenter's token the hub refuses and the console's reset half-completes.
+      res = await fetch(`${config.rpOrigin}/api/rp/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(ADMIN_TOKEN ? { 'x-admin-token': ADMIN_TOKEN } : {}) }, body: '{}',
         redirect: 'error', signal: AbortSignal.timeout(8000) });
       const body: unknown = await res.json().catch(() => null);
       issued = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
@@ -774,9 +791,12 @@ export async function createMerchant(config: MerchantAppConfig) {
     return c.json(result);
   });
 
-  if (env('GOOGLE_CLIENT_ID', '')) {
-    const setupUrl = new URL('/setup-key.html', config.rpOrigin);
-    if (setupUrl.hostname === '127.0.0.1') setupUrl.hostname = 'localhost';
+  // A passkey binds to the hub's RP ID, so enrolment must happen on the hub's
+  // hostname. Serving this page from the console works only while the two share
+  // a hostname, as they do on a laptop.
+  const setupUrl = new URL('/setup-key.html', config.rpOrigin);
+  if (setupUrl.hostname === '127.0.0.1') setupUrl.hostname = 'localhost';
+  if (env('GOOGLE_CLIENT_ID', '') || setupUrl.hostname !== new URL(merchantOrigin()).hostname) {
     app.get('/setup-key.html', (c) => c.redirect(setupUrl.toString()));
   }
   app.use('/*', serveStatic({ root: path.relative(process.cwd(), WEB_DIR) || './web' }));
@@ -789,7 +809,11 @@ export async function createMerchant(config: MerchantAppConfig) {
       await handleStatelessMcp(req, res, () => createGatewayServer({
         merchantOrigin: `http://127.0.0.1:${req.socket.localPort}`,
         audience: identity.did,
-      }), { loopbackOnly: true });
+      }), {
+        loopbackOnly: true,
+        allowedHosts: publicHosts(merchantOrigin()),
+        token: GATEWAY_TOKEN,
+      });
       return;
     }
     if (url.pathname === '/mcp') {

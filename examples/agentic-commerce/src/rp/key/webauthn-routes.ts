@@ -39,6 +39,10 @@ export interface KeyRoutesConfig {
   origin: string;
   /** Identity-enabled setup lives on the RP origin; revocation keeps its console origin. */
   registrationOrigin?: string;
+  /** Other first-party origins that may enrol an authenticator. The console is
+   *  served by the merchant on a laptop and by a separate host once deployed, so
+   *  enrolment must accept both rather than one or the other. */
+  additionalRegistrationOrigins?: readonly string[];
   rpName: string;
   setupEnabled: boolean;
   identityAuth?: HumanIdentityAuth;
@@ -51,13 +55,15 @@ const CHALLENGE_TTL_MS = 120_000;
 
 export function createKeyRoutes(config: KeyRoutesConfig) {
   const app = new Hono<{ Variables: { account: HumanAccount | null } }>();
+  const enrolmentOrigins = (): string[] => [
+    ...new Set([
+      config.registrationOrigin ?? config.origin,
+      ...(config.additionalRegistrationOrigins ?? []),
+    ]),
+  ];
   app.use('/api/rp/key/*', async (c, next) => {
     const origin = c.req.header('Origin');
-    if (
-      c.req.method === 'POST' &&
-      origin &&
-      origin !== (config.registrationOrigin ?? config.origin)
-    )
+    if (c.req.method === 'POST' && origin && !enrolmentOrigins().includes(origin))
       return c.json({ error: 'key_setup_origin_mismatch' }, 403);
     const account = config.identityAuth?.enabled
       ? config.identityAuth.account(c)
@@ -195,7 +201,7 @@ export function createKeyRoutes(config: KeyRoutesConfig) {
       const verification = await verifyRegistrationResponse({
         response,
         expectedChallenge: pending.challenge,
-        expectedOrigin: config.registrationOrigin ?? config.origin,
+        expectedOrigin: enrolmentOrigins(),
         expectedRPID: config.rpID,
         requireUserVerification: false,
       });

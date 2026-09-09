@@ -385,8 +385,32 @@
     $('btn-revoke').disabled = b || !rpCache.grantIssued;
     $('audit-edit').disabled = b || !editableAuditRows().length;
   }
+  // A hosted console is reachable by anyone with the link, so the presenter's
+  // destructive controls need a token. Seed it once with ?admin=<token>; it is
+  // kept for this browser and stripped from the address bar so it stays off the
+  // projector. Not per tab: the consent page's "return to console" link lands in
+  // its own tab, and a per-tab token would leave every control refused there.
+  const ADMIN_TOKEN_KEY = 'kyaos.admin.token';
+  (function seedAdminToken() {
+    try {
+      const url = new URL(window.location.href);
+      const token = url.searchParams.get('admin');
+      if (!token) return;
+      localStorage.setItem(ADMIN_TOKEN_KEY, token);
+      url.searchParams.delete('admin');
+      window.history.replaceState({}, '', url.toString());
+    } catch { /* private mode: re-add ?admin= if a control is refused */ }
+  })();
+  function adminHeaders() {
+    try {
+      const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+      return token ? { 'x-admin-token': token } : {};
+    } catch { return {}; }
+  }
+  // Only the guarded POSTs carry the token. On a GET it would make the request
+  // non-simple, and the hub's narrow rule for /consent/status refuses that preflight.
   async function api(path, opts, base = '', signal = AbortSignal.timeout(30_000)) {
-    const res = await fetch(base + path, { cache: 'no-store', method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: opts ? JSON.stringify(opts) : undefined, signal });
+    const res = await fetch(base + path, { cache: 'no-store', method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(opts ? adminHeaders() : {}) }, body: opts ? JSON.stringify(opts) : undefined, signal });
     let data;
     try { data = await res.json(); }
     catch (error) {
@@ -703,7 +727,8 @@
         sharedEvents = new SharedWorker('/event-streams.js?v=2', { name: 'merchant-monitor-events-v2' });
         sharedEvents.port.onmessage = ({ data }) => {
           const client = eventClients.get(data.url);
-          if (client) client['on' + data.type]?.({ data: data.data });
+          if (!client) return;
+          client['on' + data.type]?.({ data: data.data });
         };
         sharedEvents.port.start();
         window.addEventListener('pagehide', () => {
@@ -1299,6 +1324,21 @@
       let result;
       if (!rpCache.keyRequired) {
         result = await revokeRequest('/api/rp/revoke', { index });
+      } else if (rpOrigin && new URL(rpOrigin, location.href).hostname !== location.hostname) {
+        // A passkey belongs to the hub's RP ID and cannot be requested from this
+        // page once the hostnames differ. Hand the ceremony to the hub and let the
+        // existing RP state stream report the outcome.
+        const url = new URL('/revoke', rpOrigin).toString();
+        const win = window.open(url, 'kyaos-revoke', 'popup,width=460,height=520');
+        if (!win) {
+          setSeal('ready', 'Allow popups for this site, or open the hub\u2019s /revoke page directly.');
+          setCode('POPUP BLOCKED', 'amber');
+          line('The revocation popup was blocked. Open ' + esc(url) + ' to confirm with your key.', 'warn-line');
+        } else {
+          setSeal('ready', 'Confirm the revocation in the Responsible Party window.');
+        }
+        setBusy(false);
+        return;
       } else {
         const ch = await revokeRequest('/api/rp/revoke/challenge', {});
         if (generation !== merchantRunGeneration) return;
