@@ -33,9 +33,13 @@ export interface Mandate {
   credentialId: string | null;
 }
 
-export type OrderOutcome =
-  | { ok: true; orderId: string; item: CatalogItem; quantity: number; total: string; currency: string; mandate: Mandate; checks: Record<string, string> }
+export interface ApprovedOrderQuote {
+  ok: true; item: CatalogItem; quantity: number; total: string; currency: string; mandate: Mandate; checks: Record<string, string>;
+}
+export type OrderQuoteOutcome =
+  | ApprovedOrderQuote
   | { ok: false; error: 'UNKNOWN_PRODUCT' | 'INVALID_PRODUCT_URI' | 'INVALID_QUANTITY' | 'PRODUCT_OUT_OF_SCOPE' | 'CURRENCY_MISMATCH' | 'SPEND_CAP_EXCEEDED' | 'NO_CAP_IN_CREDENTIAL'; message: string; mandate: Mandate | null; detail?: Record<string, unknown> };
+export type OrderOutcome = (ApprovedOrderQuote & { orderId: string }) | Extract<OrderQuoteOutcome, { ok: false }>;
 
 export function summarizeMandate(vc: DelegationCredential): Mandate {
   const d = vc.credentialSubject.delegation;
@@ -67,9 +71,8 @@ function admittingScope(uri: string, vc: DelegationCredential): CrispScope | nul
   return null;
 }
 
-let orderSeq = 0;
-
-export function decideOrder(req: OrderRequest, vc: DelegationCredential): OrderOutcome {
+/** Pure policy evaluation; a quote is not a committed order or payment. */
+export function evaluateOrder(req: OrderRequest, vc: DelegationCredential): OrderQuoteOutcome {
   const mandate = summarizeMandate(vc);
 
   const item = findCatalogItem(req.product);
@@ -120,10 +123,8 @@ export function decideOrder(req: OrderRequest, vc: DelegationCredential): OrderO
     };
   }
 
-  orderSeq += 1;
   return {
     ok: true,
-    orderId: `ORD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(orderSeq).padStart(4, '0')}`,
     item,
     quantity,
     total: formatMinor(total, item.currency),
@@ -139,4 +140,17 @@ export function decideOrder(req: OrderRequest, vc: DelegationCredential): OrderO
       spendCap: `${formatMinor(total, item.currency)} ≤ ${formatMinor(cap, item.currency)}`,
     },
   };
+}
+
+let orderSeq = 0;
+/** Allocate only once the caller has decided to commit the legacy demo order. */
+export function allocateOrderId(): string {
+  orderSeq += 1;
+  return `ORD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(orderSeq).padStart(4, '0')}`;
+}
+
+/** Compatibility helper for callers that intentionally create a legacy order. */
+export function decideOrder(req: OrderRequest, vc: DelegationCredential): OrderOutcome {
+  const outcome = evaluateOrder(req, vc);
+  return outcome.ok ? { ...outcome, orderId: allocateOrderId() } : outcome;
 }

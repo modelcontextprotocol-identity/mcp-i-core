@@ -111,6 +111,13 @@
         </details>
         </fieldset>
       </div>
+      <section class="audit-controls" aria-label="Audit evidence">
+        <div class="audit-actions">
+          <button class="act" id="btn-audit" title="Show audit · [A] · checkpoint + witness">Show audit<span class="key">A</span></button>
+          <button class="act danger" id="btn-tamper" title="Insider edit · [T] · with the key">Insider edit<span class="key">T</span></button>
+          <button class="act" id="btn-export" title="Export bundle · [E] · kya-audit verify">Export bundle<span class="key">E</span></button>
+        </div>
+      </section>
     </section>
 <section class="panel decision-panel" aria-label="Merchant decision">
       <div class="decision-topline"><span id="decision-label">Merchant verifier</span><span class="latency" id="latency"></span></div>
@@ -118,20 +125,31 @@
         <div class="decision-symbol" id="decision-symbol" aria-hidden="true"><svg id="decision-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
         <div class="decision-copy" id="decision-copy"><div class="decision-heading" id="decision-heading"><div class="seal ready" id="seal">READY</div><span class="decision-cursor" id="decision-cursor" aria-hidden="true">_</span><div class="decision-decrypt" id="decision-decrypt" aria-hidden="true" hidden></div></div><p id="decision-summary">Waiting for an agent request.</p></div>
       </div>
-      <div class="verdict-cap"><div class="verdict-status"><span class="verdict-code" id="verdict-code"></span><span id="verdict-context"></span></div><span id="verdict-note"></span></div>
+      <div class="verdict-cap"><div class="verdict-status"><span class="verdict-code" id="verdict-code"></span><span id="verdict-context"></span></div>
+        <div class="authorization" id="authorization-panel" hidden aria-live="polite">
+          <h2>Human consent required</h2>
+          <a id="authorization-link" aria-label="Open human consent in a popup window" target="_blank" rel="noopener noreferrer">Open human consent</a>
+          <details class="consent-link-detail"><summary>Request details</summary><div class="consent-popover"><p id="authorization-detail"></p><span class="url" id="authorization-url"></span></div></details>
+        </div>
+        <span id="verdict-note"></span></div>
       <div class="gates idle" id="gates"></div>
-      <div class="authorization" id="authorization-panel" hidden aria-live="polite">
-        <h2>Human consent required</h2>
-        <a id="authorization-link" aria-label="Open human consent in a popup window" target="_blank" rel="noopener noreferrer">Open human consent</a>
-        <details class="consent-link-detail"><summary>Request details</summary><p id="authorization-detail"></p><span class="url" id="authorization-url"></span></details>
-      </div>
 </section>
 <section class="panel event-panel" aria-label="Live merchant events">
       <div class="panel-head"><span>Live activity <span class="section-context">/ merchant events</span></span><button class="toggle" id="clear-log">Clear log</button></div>
       <div class="log" id="log"></div>
     </section>
 <section class="operator-rail" aria-label="Operator fallback controls">
-  <div class="controls"><button class="act primary" id="btn-order" title="Order risotto · [1] · CHF 39.80">Order risotto<span class="key">1</span></button><button class="act" id="btn-retry" title="Retry order · [4] · 2 × risotto">Retry order<span class="key">4</span></button><button class="act danger" id="btn-revoke" title="Revoke grant · [K]">Revoke grant<span class="key">K</span></button><button class="act" id="btn-wrong" title="Wrong product · [2] · olive oil">Wrong product<span class="key">2</span></button><button class="act" id="btn-overcap" title="Over cap · [3] · 5 × = CHF 99.50">Over cap<span class="key">3</span></button><button class="act" id="btn-steal" title="Stolen credential · [5] · wrong key">Stolen credential<span class="key">5</span></button><button class="act" id="btn-discover" title="Discover · [0]">Discover<span class="key">0</span></button><button class="act" id="btn-verify" title="Verify receipt · [V]">Verify receipt<span class="key">V</span></button><button class="act" id="btn-reset" title="Reset grant · [R] · consent required">Reset grant<span class="key">R</span></button><button class="act" id="btn-audit" title="Show audit · [A] · checkpoint + witness">Show audit<span class="key">A</span></button><button class="act danger" id="btn-tamper" title="Insider edit · [T] · with the key">Insider edit<span class="key">T</span></button><button class="act" id="btn-export" title="Export bundle · [E] · kya-audit verify">Export bundle<span class="key">E</span></button></div>
+  <div class="controls">
+    <button class="act" id="btn-discover" title="Discover · [0]">Discover<span class="key">0</span></button>
+    <button class="act primary" id="btn-order" title="Order risotto · [1] · CHF 39.80">Order risotto<span class="key">1</span></button>
+    <button class="act" id="btn-wrong" title="Wrong product · [2] · olive oil">Wrong product<span class="key">2</span></button>
+    <button class="act" id="btn-overcap" title="Over cap · [3] · 5 × = CHF 99.50">Over cap<span class="key">3</span></button>
+    <button class="act" id="btn-retry" title="Retry order · [4] · 2 × risotto">Retry order<span class="key">4</span></button>
+    <button class="act" id="btn-steal" title="Stolen credential · [5] · wrong key">Stolen credential<span class="key">5</span></button>
+    <button class="act danger" id="btn-revoke" title="Revoke grant · [K]">Revoke grant<span class="key">K</span></button>
+    <button class="act" id="btn-verify" title="Verify receipt · [V]">Verify receipt<span class="key">V</span></button>
+    <button class="act" id="btn-reset" title="Start over · [R] · revoke the current grant, clear it from the demo wallet and request fresh consent">Start over<span class="key">R</span></button>
+  </div>
 </section>
 </main>
 
@@ -150,9 +168,20 @@
   <div class="audit-head">
     <div class="title" id="audit-title">AUDIT <span class="cut">TRAIL</span></div>
     <div class="sub" id="audit-sub">every decision the gate made, as the SDK recorded it · <b>signed</b> · <b>hash-chained</b> · <b>RFC 9162 checkpoint</b> · <b>witnessed by the Responsible Party</b></div>
-    <div class="close" id="audit-close">esc · close</div>
+    <button class="act audit-edit-trigger" id="audit-edit" type="button">Edit entry<span class="key">T</span></button>
+    <button class="close" id="audit-close" type="button">esc · close</button>
   </div>
   <div class="audit-status" id="audit-status" role="status" aria-live="polite" hidden></div>
+  <form class="audit-editor" id="audit-editor" aria-labelledby="audit-edit-title" hidden>
+    <div class="audit-editor-heading"><h2 id="audit-edit-title">Edit an audit entry</h2><p>Change a copy of the signed record. The original checkpoint stays fixed.</p></div>
+    <div class="audit-editor-fields">
+      <label class="audit-entry-field" for="audit-edit-entry">Entry<select id="audit-edit-entry" name="sequence"></select></label>
+      <div class="audit-original">Recorded outcome<strong id="audit-edit-before"></strong></div>
+      <label for="audit-edit-outcome">Change outcome to<select id="audit-edit-outcome" name="outcome"></select></label>
+      <div class="audit-editor-actions"><button class="audit-button primary" id="audit-edit-done" type="submit" disabled>Done · verify edit</button><button class="audit-button" id="audit-edit-cancel" type="button">Cancel</button></div>
+    </div>
+    <p id="audit-edit-feedback" class="audit-edit-feedback" role="status" aria-live="polite"></p>
+  </form>
   <div class="audit-body" id="audit-body">
     <div class="audit-col">
       <div class="audit-box grow">
@@ -189,7 +218,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const seal = $('seal'), log = $('log'), rpLog = $('rp-log');
-  let busy = false, lastRevoked, stateCache = {}, rpCache = {}, rpOrigin = null, pendingAuthorization = null;
+  let busy = false, lastRevoked, stateCache = {}, rpCache = {}, rpOrigin = null, pendingAuthorization = null, pendingCheckout = null;
 
   const GATES = [
     ['signature', 'Signature · window · audience'], ['revocation', 'Revocation'], ['holder', 'Holder key'],
@@ -242,7 +271,7 @@
     log.prepend(el);
   }
 
-  const SEAL_TEXT = { ok: 'AUTHORIZED', kill: 'REVOKED', blocked: 'REFUSED', denied: 'DENIED', wait: 'VERIFYING', ready: 'READY', unknown: 'CHECK OUTCOME', consent: 'CONSENT NEEDED', approved: 'GRANT APPROVED' };
+  const SEAL_TEXT = { ok: 'AUTHORIZED', kill: 'REVOKED', blocked: 'REFUSED', denied: 'DENIED', wait: 'VERIFYING', ready: 'READY', unknown: 'CHECK OUTCOME', consent: 'CONSENT NEEDED', approved: 'GRANT APPROVED', payment: 'PAYMENT NEEDED', checkout: 'REVIEW CHECKOUT' };
   const DECISIONS = {
     ready: ['Merchant verifier', 'Waiting for an agent request.', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
     wait: ['Merchant decision', 'Checking the agent’s authority for this request.', '<circle cx="12" cy="12" r="9" opacity=".25"/><path class="processing-ring" d="M12 3a9 9 0 0 1 9 9"/><g class="processing-dots"><circle class="processing-dot" cx="8" cy="12" r="1"/><circle class="processing-dot" cx="12" cy="12" r="1"/><circle class="processing-dot" cx="16" cy="12" r="1"/></g>'],
@@ -253,6 +282,8 @@
     blocked: ['Merchant decision', 'The requested action is outside the approved grant.', '<path d="m6 6 12 12M18 6 6 18"/>'],
     denied: ['Merchant decision', 'The merchant refused this request. No order placed.', '<path d="m6 6 12 12M18 6 6 18"/>'],
     unknown: ['Unconfirmed outcome', 'Check the live activity before retrying.', '<path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3v.1"/>'],
+    payment: ['Merchant verifier', 'Authority verified. Awaiting payment authorization.', '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18m-13 5h4"/>'],
+    checkout: ['Human checkout review', 'Confirm the exact items, total and payment terms.', '<rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 8h6m-6 4h6m-6 4h3"/>'],
   };
   const decisionTimers = new Set();
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
@@ -335,7 +366,13 @@
     const el = $('verdict-code');
     el.className = 'verdict-code' + (color ? ' ' + color : '');
     const [code = '', ...context] = (text || '').split(' · ');
-    el.textContent = code.trim().toUpperCase().replace(/[\s-]+/g, '_');
+    const normalized = code.trim().toUpperCase().replace(/[\s-]+/g, '_');
+    const words = normalized ? normalized.split('_') : [];
+    el.replaceChildren(...words.flatMap((word, index) => {
+      const token = document.createElement('span');
+      token.textContent = word + (index < words.length - 1 ? '_' : '');
+      return index < words.length - 1 ? [token, document.createElement('wbr')] : [token];
+    }));
     $('verdict-context').textContent = context.join(' · ');
   }
   function setBusy(b) {
@@ -350,6 +387,7 @@
 
   function hideAuthorization() {
     pendingAuthorization = null;
+    pendingCheckout = null;
     $('authorization-panel').hidden = true;
     $('authorization-link').removeAttribute('href');
     $('authorization-url').textContent = '';
@@ -369,6 +407,8 @@
         return;
       }
       pendingAuthorization = challenge;
+      $('authorization-link').textContent = 'Open human consent';
+      $('authorization-link').setAttribute('aria-label', 'Open human consent in a popup window');
       $('authorization-link').href = url.href;
       $('authorization-detail').textContent = `place_order · ${(challenge.scopes || []).join(', ')} · expires ${new Date(challenge.expiresAt * 1000).toLocaleTimeString()}`;
       $('authorization-url').textContent = url.href;
@@ -381,13 +421,34 @@
     }
   }
 
+  function showCheckout(event) {
+    hideAuthorization();
+    try {
+      const url = new URL(event.url);
+      if (url.origin !== window.location.origin || url.username || url.password || url.hash
+        || url.pathname !== '/checkout/' + encodeURIComponent(event.id) || !url.searchParams.get('token')) throw new Error('Invalid merchant checkout URL');
+      const expiresAt = Date.parse(event.expiresAt) / 1000;
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() / 1000) throw new Error('Checkout expired');
+      pendingCheckout = { authorizationUrl: url.href, expiresAt, id: event.id };
+      $('authorization-link').href = url.href;
+      $('authorization-link').textContent = 'Review checkout';
+      $('authorization-link').setAttribute('aria-label', 'Review the exact checkout in a popup window');
+      $('authorization-detail').textContent = 'UCP checkout · confirm the exact terms, then ask the agent to finish.';
+      $('authorization-url').textContent = url.href;
+      $('authorization-panel').hidden = false;
+      setSeal('checkout'); setCode('CHECKOUT_CONFIRMATION_REQUIRED', 'amber');
+      line('UCP checkout ready for human review. No payment has been submitted.', 'warn-line', true);
+    } catch (error) { setSeal('denied'); setCode('CHECKOUT_URL_REJECTED', 'red'); line(esc(error.message), 'kill-line'); }
+  }
+
   $('authorization-link').onclick = (event) => {
     // Preserve native tab behavior for modified clicks and popup blocking.
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    const challenge = pendingAuthorization;
+    const challenge = pendingAuthorization || pendingCheckout;
     if (!challenge || challenge.expiresAt <= Date.now() / 1000) {
       event.preventDefault();
-      if (challenge) showAuthorization(challenge);
+      if (pendingAuthorization) showAuthorization(pendingAuthorization);
+      else if (pendingCheckout) { hideAuthorization(); setSeal('denied'); setCode('CHECKOUT_EXPIRED', 'amber'); }
       return;
     }
     const available = window.screen;
@@ -655,12 +716,30 @@
       } else if (e.type === 'request') {
         setGates('check'); setSeal('wait'); setCode(''); $('latency').textContent = '';
         line(`Agent requested <b>${esc(e.quantity)} × ${esc(e.product)}</b> <code>place_order</code> · checking authority.`, 'src-line');
+      } else if (e.type === 'checkout.review') {
+        showCheckout(e);
+      } else if (e.type === 'checkout.confirmed') {
+        if (pendingCheckout && pendingCheckout.id === e.id) {
+          hideAuthorization(); setSeal('ready'); setCode('CHECKOUT_CONFIRMED', 'amber');
+          $('decision-summary').textContent = 'Checkout confirmed. Ask the agent to finish.';
+        }
+      } else if (e.type === 'payment') {
+        const rail = e.rail === 'x402' ? 'x402 · USDC' : 'Sandbox token';
+        if (e.phase === 'authorized') line(`<b>${esc(rail)}</b> · current grant verified before settlement.`, 'info-line');
+        else line(`<b>${esc(rail)}</b> · ${e.payment?.simulated ? 'settlement simulated; no funds moved' : 'Base Sepolia testnet settlement confirmed'}.`, 'ok-line', true);
       } else if (e.type === 'verdict') {
         applyChecks(e.checks || {});
         $('latency').textContent = `${e.elapsedMs} ms end to end`;
         const b = e.body || {};
         if (b.error === 'needs_authorization' || e.verdict === 'needs_authorization') {
           showAuthorization(b);
+        } else if (b.error === 'PAYMENT_REQUIRED') {
+          hideAuthorization(); setSeal('payment'); setCode('PAYMENT_REQUIRED', 'amber');
+          line('KYA authority accepted. x402 payment authorization is the next step; no order placed yet.', 'info-line', true);
+        } else if (b.error === 'SETTLEMENT_PENDING') {
+          hideAuthorization(); setSeal('unknown'); setCode('SETTLEMENT_PENDING', 'amber');
+          $('decision-summary').textContent = 'Payment outcome unresolved. Do not submit another payment.';
+          line('Settlement outcome is unresolved. The checkout is held to prevent another charge.', 'warn-line', true);
         } else if (e.verdict === 'allowed') {
           hideAuthorization();
           setSeal('ok'); setCode('');
@@ -723,7 +802,7 @@
         refresh();
       } else if (e.type === 'tamper') {
         const v = e.verdicts || {};
-        line(`insider edit #${esc(e.target.seq)} ${esc(e.target.eventType)} ${esc(e.target.before)} → ${esc(e.target.after)}: receipt re-signed ${e.forgedReceiptVerifies ? '✓' : '✗'} · chain break at #${esc(e.chainBreaksAt)} · root mismatch · inclusion ${e.forgedInclusion ? '✓' : '✗'} → verifier: chain ${esc((v.chainIntegrity || {}).verdict)}, checkpoint ${esc((v.checkpointIntegrity || {}).verdict)}`, 'kill-line', true);
+        line(`insider edit #${esc(e.target.seq)} ${esc(e.target.eventType)} ${esc(e.target.before)} → ${esc(e.target.after)}: receipt re-signed ${e.forgedReceiptVerifies ? '✓' : '✗'} · ${e.chainBreaksAt !== null ? `chain break at #${esc(e.chainBreaksAt)}` : 'no following chain link'} · ${e.rootsMatch ? 'root unchanged' : 'root mismatch'} · inclusion ${e.forgedInclusion ? '✓' : '✗'} → verifier: chain ${esc((v.chainIntegrity || {}).verdict)}, checkpoint ${esc((v.checkpointIntegrity || {}).verdict)}`, 'kill-line', true);
       } else if (e.type === 'export') {
         line(`replay bundle ${esc(short(e.bundleId, 60))} written · honest ${esc((e.verdicts.honest.chainIntegrity || {}).verdict)} / edited ${esc((e.verdicts.tampered.chainIntegrity || {}).verdict)} · <code>${esc(e.command.honest)}</code>`, 'info-line');
       }
@@ -790,7 +869,8 @@
   const D = (d, n = 16) => (typeof d === 'string' ? d.replace(/^sha256:/, '').slice(0, n) : '—');
   const digestHtml = (d, n) => esc(D(d, n));
   const ts = (ms) => (ms ? new Date(ms).toISOString().slice(11, 19) + 'Z' : '—');
-  let auditReport = null, auditTamper = null;
+  let auditReport = null, auditTamper = null, auditEditing = false, auditEditRequested = false;
+  const AUDIT_OUTCOMES = ['succeeded', 'failed', 'denied', 'challenged', 'unknown'];
 
   function renderAuditStrip(a) {
     if (!a) return;
@@ -819,17 +899,18 @@
     const forgedSeq = tamper ? tamper.target.seq : null;
     const breakSeq = tamper ? tamper.chainBreaksAt : null;
     const rows = r.entries.map((e) => {
-      const cls = ['o-' + e.outcome, e.seq === forgedSeq ? 'forged' : '', e.seq === breakSeq ? 'break' : '', e.anchored ? '' : 'unanchored'].filter(Boolean).join(' ');
+      const cls = ['o-' + e.outcome, e.seq === forgedSeq ? 'forged' : '', e.seq === breakSeq ? 'break' : '', auditEditing && e.seq === $('audit-edit-entry').value ? 'editing' : '', e.anchored ? '' : 'unanchored'].filter(Boolean).join(' ');
       const out = e.seq === forgedSeq ? `<s>${esc(tamper.target.before)}</s>${esc(tamper.target.after)}` : esc(e.outcome);
       const chain = e.seq === breakSeq ? `BREAK · names ${digestHtml(e.previousEntryDigest, 6)}, not the edit` : (e.previousEntryDigest ? `${digestHtml(e.previousEntryDigest, 8)}` : 'genesis');
       return `<tr class="${esc(cls)}" id="ledger-row-${esc(e.seq)}"><td class="seq">${esc(e.seq)}</td><td class="ev">${esc(e.eventType)}${e.tool ? ' <span class="muted">' + esc(e.tool) + '</span>' : ''}</td><td class="out">${out}</td><td class="reason"><span title="${esc(e.reason || '')}">${esc(e.reason || '')}</span></td><td class="digest">${digestHtml(e.entryDigest, 10)}</td><td class="chain">${chain}</td></tr>`;
     }).join('');
     $('audit-table').innerHTML = `<table class="ledger"><thead><tr><th>#</th><th>event · ${esc(r.entries[0] ? r.entries[0].at.slice(0, 10) : '')}</th><th>outcome</th><th>reason</th><th>entry digest</th><th>previous (chain)</th></tr></thead><tbody>${rows}</tbody></table>`;
     const box = $('audit-table');
-    const target = forgedSeq !== null ? $('ledger-row-' + forgedSeq) : null;
+    const selected = auditEditing ? $('audit-edit-entry').value : forgedSeq;
+    const target = selected !== null ? $('ledger-row-' + selected) : null;
     if (target) target.scrollIntoView({ block: 'center' }); else box.scrollTop = box.scrollHeight;
-    $('audit-chain-note').textContent = tamper ? `chain broken at #${tamper.chainBreaksAt ?? '—'}` : (r.chainIntact ? `${r.entries.length} entries · chain intact` : 'CHAIN BROKEN');
-    $('audit-chain-note').className = tamper || !r.chainIntact ? 'kill-line' : 'ok-line';
+    $('audit-chain-note').textContent = tamper ? (tamper.chainBreaksAt !== null ? `chain broken at #${tamper.chainBreaksAt}` : 'chain links intact · final entry edited') : (r.chainIntact ? `${r.entries.length} entries · chain intact` : 'CHAIN BROKEN');
+    $('audit-chain-note').className = tamper ? (tamper.chainBreaksAt !== null ? 'kill-line' : 'warn-line') : (!r.chainIntact ? 'kill-line' : 'ok-line');
   }
 
   function renderTree(r, tamper) {
@@ -844,12 +925,13 @@
     }).join('');
     const forgedEl = $('tree-forged');
     if (forgedEl) forgedEl.scrollIntoView({ block: 'center' }); else $('audit-tree').scrollTop = 0;
-    $('audit-tree-note').textContent = `${r.inclusions.length} leaves · inclusion ${r.allIncluded ? '✓ all' : 'incomplete'}${r.unanchored ? ` · ${r.unanchored} newer unanchored` : ''}`;
-    $('audit-tree-note').className = r.allIncluded ? 'ok-line' : 'warn-line';
+    $('audit-tree-note').textContent = `${r.inclusions.length} leaves · ${tamper ? (tamper.forgedInclusion ? 'edited leaf included' : 'edited leaf fails inclusion') : `inclusion ${r.allIncluded ? '✓ all' : 'incomplete'}`}${r.unanchored ? ` · ${r.unanchored} newer unanchored` : ''}`;
+    $('audit-tree-note').className = tamper && !tamper.forgedInclusion ? 'kill-line' : (r.allIncluded ? 'ok-line' : 'warn-line');
   }
 
   function renderAudit(r) {
-    auditReport = r; auditTamper = null;
+    auditReport = r; auditTamper = null; auditEditing = false;
+    $('audit-editor').hidden = true;
     $('audit-overlay').classList.add('on');
     $('audit-status').hidden = true;
     $('audit-body').hidden = false;
@@ -868,7 +950,7 @@
     $('audit-cp-note').className = 'ok-line';
     renderTree(r, null);
     $('audit-tamper-box').style.display = 'none';
-    $('audit-verdicts').innerHTML = '<div class="muted">press T to have an insider edit one entry, or E to export and verify offline</div>';
+    $('audit-verdicts').innerHTML = '<div class="muted">Choose Edit entry or press T to change an outcome, then verify it against this checkpoint. Press E to export.</div>';
     $('audit-verdict-note').textContent = '';
     $('audit-export').innerHTML = '';
     $('audit-foot').innerHTML = `<span>entry digest <b>sha256("org.kya-os.audit.entry.v1\\0" ‖ JCS(core))</b></span><span><b>RFC 9162</b> tree</span><span><b>JWS · EdDSA</b></span><span>bundle → <b>kya-audit verify</b> · <b>verify-ledger.py</b> (stdlib)</span>`;
@@ -876,20 +958,24 @@
 
   function renderTamper(t) {
     if (!auditReport) return;
-    auditTamper = t;
+    auditTamper = t; auditEditing = false;
+    const checkpointReasons = (t.reports.tampered.checkpointIntegrity?.reasonCodes || []).map(reason => esc(reason.replace(/^AUDIT_/, ''))).join(' · ');
+    const chainReasons = (t.reports.tampered.chainIntegrity?.reasonCodes || []).map(reason => esc(reason.replace(/^AUDIT_/, ''))).join(' · ');
+    $('audit-editor').hidden = true;
     $('audit-title').className = 'title tampered'; $('audit-title').innerHTML = 'INSIDER <span class="cut">EDIT</span>';
     $('audit-tamper-box').style.display = '';
     $('audit-tamper-note').textContent = `#${t.target.seq} ${t.target.eventType}: ${t.target.before} → ${t.target.after}`;
     $('audit-tamper-note').className = 'kill-line';
     $('audit-tamper').innerHTML = `
-      <div class="tamper-banner">An <b>insider with the merchant's signing key</b> rewrites entry #${esc(t.target.seq)} (${esc(t.target.eventType)}${t.target.reason ? ', ' + esc(t.target.reason) : ''}) from <b>${esc(t.target.before)}</b> to <b>${esc(t.target.after)}</b>, recomputes its digests and re-signs the receipt — the signature <span class="ok">verifies</span>. Still caught, three ways:</div>
+      <div class="tamper-banner">An <b>insider with the merchant's signing key</b> rewrites entry #${esc(t.target.seq)} (${esc(t.target.eventType)}${t.target.reason ? ', ' + esc(t.target.reason) : ''}) from <b>${esc(t.target.before)}</b> to <b>${esc(t.target.after)}</b>, recomputes its digests and re-signs the receipt ; the signature <span class="${t.forgedReceiptVerifies ? 'ok' : 'kill-line'}">${t.forgedReceiptVerifies ? 'verifies' : 'does not verify'}</span>. The original checkpoint stays fixed:</div>
       <dl class="kv tight" style="margin-top:6px">
-        <dt>chain</dt><dd class="kill-line">#${esc(t.chainBreaksAt ?? '—')} still names the honest digest as its predecessor → PREDECESSOR_MISMATCH</dd>
-        <dt>root</dt><dd class="kill-line">anchored ${digestHtml(t.anchoredRoot, 12)} ≠ recomputed ${digestHtml(t.tamperedRoot, 12)} → CHECKPOINT_ROOT_MISMATCH · the edited leaf's path no longer reaches the signed root → MERKLE_PROOF_INVALID</dd>
+        <dt>chain</dt><dd class="${t.chainBreaksAt !== null ? 'kill-line' : 'warn-line'}">${t.chainBreaksAt !== null ? `#${esc(t.chainBreaksAt)} still names the honest digest as its predecessor${chainReasons ? ` → ${chainReasons}` : ''}` : 'No following entry links to this final row. The checkpoint and inclusion proof still detect the edit.'}</dd>
+        <dt>root</dt><dd class="kill-line">anchored ${digestHtml(t.anchoredRoot, 12)} ≠ recomputed ${digestHtml(t.tamperedRoot, 12)} · the edited leaf's path no longer reaches the signed root${checkpointReasons ? `<br>${checkpointReasons}` : ''}</dd>
         <dt>witness</dt><dd class="${t.witnessStillBindsAnchoredRoot ? 'ok' : 'amber'}">${t.witnessStillBindsAnchoredRoot ? 'the Responsible Party\'s receipt binds the honest root — re-signing the checkpoint would contradict a third party' : 'no witness receipt in this run'}</dd>
       </dl>`;
     const hv = dims(t.reports.honest);
-    $('audit-verdicts').innerHTML = verdictStrip(t.reports.tampered, 'edited bundle') + `<div class="vr-line"><span class="ok">honest bundle, same verifier · policy · keys: ${hv.filter(([, x]) => x.verdict === 'valid').length} valid · ${hv.filter(([, x]) => x.verdict === 'indeterminate').length} indeterminate · 0 invalid</span></div>`;
+    const honestInvalid = hv.filter(([, result]) => result.verdict === 'invalid').length;
+    $('audit-verdicts').innerHTML = verdictStrip(t.reports.tampered, 'edited bundle') + `<div class="vr-line"><span class="${honestInvalid ? 'kill-line' : 'ok-line'}">honest bundle, same verifier · policy · keys: ${hv.filter(([, x]) => x.verdict === 'valid').length} valid · ${hv.filter(([, x]) => x.verdict === 'indeterminate').length} indeterminate · ${honestInvalid} invalid</span></div>`;
     $('audit-verdict-note').textContent = 'verdict on the edited bundle';
     $('audit-verdict-note').className = 'kill-line';
     renderLedgerTable(auditReport, t);
@@ -899,10 +985,11 @@
   function renderExport(e) {
     const v = (rep) => Object.values(rep).filter((x) => x && typeof x === 'object' && 'verdict' in x);
     const bad = v(e.reports.tampered).filter((x) => x.verdict === 'invalid').length;
+    const honestBad = v(e.reports.honest).filter((x) => x.verdict === 'invalid').length;
     $('audit-export').innerHTML = `
       <div><b style="color:var(--text)">var/audit/bundle.json</b> · bundle.tampered.json · ${e.components.map((c) => esc(c.path) + ' ' + esc(c.size) + ' B').join(' · ')} · policy.json · keys.json · manifest ${digestHtml(e.manifestDigest, 12)} signed</div>
-      <div style="margin-top:3px" title="${esc(e.command.honest)}"><code style="display:inline">npm run verify:ledger</code> → <span class="ok-line">exit 0</span> &nbsp; <code style="display:inline">npm run verify:ledger:tampered</code> → <span class="kill-line">exit 1 · ${esc(bad)} invalid</span> &nbsp; <code style="display:inline">npm run verify:ledger:py</code> → stdlib Python, no SDK · <a href="/api/audit/bundle" download>download</a></div>`;
-    if (!auditTamper) { $('audit-verdicts').innerHTML = verdictStrip(e.reports.honest, 'bundle.json'); $('audit-verdict-note').textContent = 'written to var/audit · trust from policy.json + keys.json, never from the bundle'; $('audit-verdict-note').className = 'ok-line'; }
+      <div style="margin-top:3px" title="${esc(e.command.honest)}"><code style="display:inline">npm run verify:ledger</code> → <span class="${honestBad ? 'kill-line' : 'ok-line'}">expected exit ${honestBad ? 1 : 0}</span> &nbsp; <code style="display:inline">npm run verify:ledger:tampered</code> → <span class="${bad ? 'kill-line' : 'ok-line'}">expected exit ${bad ? 1 : 0} · ${esc(bad)} invalid</span> &nbsp; <code style="display:inline">npm run verify:ledger:py</code> → stdlib Python, no SDK · <a href="/api/audit/bundle" download>download</a></div>`;
+    if (!auditTamper) { $('audit-verdicts').innerHTML = verdictStrip(e.reports.honest, 'bundle.json'); $('audit-verdict-note').textContent = 'written to var/audit · trust from policy.json + keys.json, never from the bundle'; $('audit-verdict-note').className = honestBad ? 'kill-line' : 'ok-line'; }
   }
 
   async function actAudit() {
@@ -933,15 +1020,98 @@
     } finally {
       overlay.setAttribute('aria-busy', 'false');
       setBusy(false);
+      const openEditor = auditEditRequested;
+      auditEditRequested = false;
+      if (openEditor && auditReport && status.hidden && overlay.classList.contains('on')) openAuditEditor();
     }
   }
+  const editableAuditRows = () => auditReport?.checkpoint?.checkpointDigest
+    ? auditReport.entries.filter(row => row.anchored && /^\d+$/.test(row.seq) && AUDIT_OUTCOMES.includes(row.outcome)) : [];
+  function syncAuditEditor() {
+    const row = editableAuditRows().find(row => row.seq === $('audit-edit-entry').value);
+    const outcome = $('audit-edit-outcome').value;
+    $('audit-edit-done').disabled = busy || !row || !AUDIT_OUTCOMES.includes(outcome) || outcome === row.outcome;
+    $('audit-edit-entry').disabled = busy;
+    $('audit-edit-outcome').disabled = busy;
+    $('audit-edit-cancel').disabled = busy;
+  }
+  function selectAuditEntry() {
+    const row = editableAuditRows().find(row => row.seq === $('audit-edit-entry').value);
+    $('audit-edit-before').textContent = row?.outcome || '';
+    $('audit-edit-outcome').value = row?.outcome || '';
+    $('audit-edit-feedback').textContent = '';
+    $('audit-edit-feedback').className = 'audit-edit-feedback';
+    renderLedgerTable(auditReport, auditTamper);
+    syncAuditEditor();
+  }
+  function openAuditEditor() {
+    const rows = editableAuditRows();
+    if (!rows.length) {
+      $('audit-status').hidden = false;
+      $('audit-status').className = 'audit-status warn-line';
+      $('audit-status').textContent = 'No checkpointed entries to edit. Run an order, then choose Show audit.';
+      $('audit-editor').hidden = true;
+      return;
+    }
+    const preferred = [...rows].reverse().find(row => row.eventType.startsWith('tool.call.') && ['denied', 'failed'].includes(row.outcome)) || rows[rows.length - 1];
+    $('audit-edit-entry').innerHTML = rows.map(row => `<option value="${esc(row.seq)}">#${esc(row.seq)} · ${esc(row.eventType)} · ${esc(row.outcome)}</option>`).join('');
+    $('audit-edit-outcome').innerHTML = AUDIT_OUTCOMES.map(outcome => `<option value="${outcome}">${outcome}</option>`).join('');
+    $('audit-edit-entry').value = preferred.seq;
+    auditEditing = true;
+    $('audit-status').hidden = true;
+    $('audit-editor').hidden = false;
+    selectAuditEntry();
+    $('audit-edit-outcome').focus();
+  }
   async function actTamper() {
-    if (busy) return; setBusy(true);
+    if (busy) {
+      if (!auditEditing && $('audit-overlay').classList.contains('on') && $('audit-overlay').getAttribute('aria-busy') === 'true') {
+        auditEditRequested = true;
+        $('audit-status').textContent = 'Refreshing the checkpoint before opening the editor…';
+      }
+      return;
+    }
+    if (!auditReport) {
+      auditEditRequested = true;
+      return actAudit();
+    } else if (!$('audit-overlay').classList.contains('on')) {
+      const previous = auditTamper;
+      renderAudit(auditReport);
+      if (previous) renderTamper(previous);
+    }
+    openAuditEditor();
+  }
+  function cancelAuditEdit() {
+    if (busy) return;
+    auditEditing = false;
+    $('audit-editor').hidden = true;
+    if (auditReport) renderLedgerTable(auditReport, auditTamper);
+    $('audit-edit').focus();
+  }
+  async function submitAuditEdit(event) {
+    event.preventDefault();
+    if (busy || !auditEditing) return;
+    const row = editableAuditRows().find(row => row.seq === $('audit-edit-entry').value);
+    const outcome = $('audit-edit-outcome').value;
+    if (!row || !AUDIT_OUTCOMES.includes(outcome) || row.outcome === outcome) return;
+    const request = { sequence: row.seq, outcome, checkpointDigest: auditReport.checkpoint.checkpointDigest };
+    const feedback = $('audit-edit-feedback');
+    setBusy(true); syncAuditEditor();
+    $('audit-overlay').setAttribute('aria-busy', 'true');
+    feedback.className = 'audit-edit-feedback warn-line';
+    feedback.textContent = 'Verifying the edited copy against the original signed checkpoint…';
     try {
-      if (!auditReport) { const r = await api('/api/act/audit', {}); if (r.error) { line(`anchor: ${esc(r.error)}`, 'warn-line'); setBusy(false); return; } renderAudit(r); }
-      const t = await api('/api/act/tamper', {}); if (t.error) line(`tamper: ${esc(t.error)}`, 'warn-line'); else renderTamper(t);
-    } catch (err) { line(`tamper failed: ${esc(err.message)}`, 'kill-line'); }
-    setBusy(false);
+      const result = await api('/api/act/tamper', request);
+      if (result.error) throw new Error(result.error);
+      if (result.target?.seq !== request.sequence || result.target?.after !== request.outcome) throw new Error('The result does not match the selected edit. Refresh Show audit before trying again.');
+      renderTamper(result);
+    } catch (err) {
+      feedback.className = 'audit-edit-feedback kill-line';
+      feedback.textContent = `Edit could not be verified: ${err.message}`;
+    } finally {
+      $('audit-overlay').setAttribute('aria-busy', 'false');
+      setBusy(false); syncAuditEditor();
+    }
   }
   async function actExport() {
     if (busy) return; setBusy(true);
@@ -951,7 +1121,7 @@
     } catch (err) { line(`export failed: ${esc(err.message)}`, 'kill-line'); }
     setBusy(false);
   }
-  const closeAudit = () => $('audit-overlay').classList.remove('on');
+  const closeAudit = () => { auditEditing = false; auditEditRequested = false; $('audit-editor').hidden = true; $('audit-overlay').classList.remove('on'); };
 
   // ── triggers (simulated agent). SSE renders the outcome. ──────────────────────
   async function trigger(path, opts) {
@@ -1083,16 +1253,22 @@
   $('btn-tamper').onclick   = actTamper;
   $('btn-export').onclick   = actExport;
   $('audit-close').onclick  = closeAudit;
+  $('audit-edit').onclick = actTamper;
+  $('audit-edit-entry').onchange = selectAuditEntry;
+  $('audit-edit-outcome').onchange = () => { $('audit-edit-feedback').textContent = ''; syncAuditEditor(); };
+  $('audit-edit-cancel').onclick = cancelAuditEdit;
+  $('audit-editor').onsubmit = submitAuditEdit;
   $('clear-log').onclick    = () => { log.innerHTML = ''; };
   $('jws-toggle').onclick   = () => { const j = $('jws'); if (j) { j.classList.toggle('open'); $('jws-toggle').textContent = j.classList.contains('open') ? 'collapse' : 'expand'; } };
   document.addEventListener('keydown', (e) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+    if (e.key === 'Escape') { closeAudit(); return; }
+    if (e.target?.closest?.('input, select, textarea, [contenteditable="true"]')) return;
     if (e.key === 'p' || e.key === 'P') { document.body.classList.toggle('presenter'); return; }
     if (e.key === 'c' || e.key === 'C') { document.body.classList.toggle('hc'); return; }
-    if (e.key === 'Escape') { closeAudit(); return; }
+    if (e.key === 't' || e.key === 'T') { actTamper(); return; }
     if (busy) return;
     if (e.key === 'a' || e.key === 'A') { if ($('audit-overlay').classList.contains('on') && auditReport && !auditTamper) closeAudit(); else actAudit(); return; }
-    if (e.key === 't' || e.key === 'T') { actTamper(); return; }
     if (e.key === 'e' || e.key === 'E') { actExport(); return; }
     if (e.key === '0') $('btn-discover').click();
     if (e.key === '1') $('btn-order').click();

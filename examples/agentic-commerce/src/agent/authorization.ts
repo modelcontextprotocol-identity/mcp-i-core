@@ -50,7 +50,11 @@ function createResponseVerifier(verifyReceipts: boolean) {
   return async (result: MerchantToolResult, expected: AuthorizationExpectation): Promise<NeedsAuthorizationError | null> => {
     const body = responseBody(result);
     const challenge = body['error'] === 'needs_authorization';
-    if (!challenge && (!verifyReceipts || result.isError || body['error'])) return null;
+    // x402 uses an MCP error-shaped tool result for its signed payment quote.
+    // Its presence is not permission to skip authenticating the merchant.
+    const payment = body['x402Version'] === 2 && Array.isArray(body['accepts']);
+    const settlementPending = body['error'] === 'SETTLEMENT_PENDING';
+    if (!challenge && (!verifyReceipts || (!payment && !settlementPending && (result.isError || body['error'])))) return null;
 
     const extracted = extractProofFromMeta(result._meta ?? {});
     if (!extracted.success) throw new Error(`Untrusted merchant response proof: ${extracted.reason}`);

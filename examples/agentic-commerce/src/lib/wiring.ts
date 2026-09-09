@@ -2,7 +2,7 @@
  * Shared wiring for the agentic-commerce example.
  *
  * Everything here composes PUBLIC exports of the published @kya-os/mcp — no
- * forks, no vendored modules. Three parties, three identities, one filesystem:
+ * forks, no vendored modules. Three parties with separate identities and state:
  *
  *   Responsible Party (RP)  did:web   issues the delegation, hosts the revocation list
  *   Merchant edge           did:key   verifies every call, signs every receipt
@@ -24,11 +24,11 @@ import {
 } from '@kya-os/mcp';
 
 export const EXAMPLE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+loadDotenv({ path: process.env['DEMO_ENV_FILE'] ?? [path.join(EXAMPLE_ROOT, '.env.local'), path.join(EXAMPLE_ROOT, '.env')], quiet: true });
+
 export const VAR_DIR = process.env['DEMO_VAR_DIR'] ?? path.join(EXAMPLE_ROOT, 'var');
 export const DATA_DIR = process.env['DEMO_DATA_DIR'] ?? path.join(EXAMPLE_ROOT, '.data');
 export const WEB_DIR = path.join(EXAMPLE_ROOT, 'web');
-
-loadDotenv({ path: process.env['DEMO_ENV_FILE'] ?? [path.join(EXAMPLE_ROOT, '.env.local'), path.join(EXAMPLE_ROOT, '.env')], quiet: true });
 
 // ---------------------------------------------------------------------------
 // Environment

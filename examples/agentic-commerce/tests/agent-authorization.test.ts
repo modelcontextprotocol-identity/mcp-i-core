@@ -167,4 +167,17 @@ describe('merchant receipt proof boundary', () => {
     result.content![0]!.text = JSON.stringify({ ...receiptBody, orderId: 'ORD-swapped' });
     await expect(check(result)).rejects.toThrow(/binding/i);
   });
+
+  it.each([
+    { x402Version: 2, error: 'PAYMENT_REQUIRED', accepts: [{ amount: '39800000' }] },
+    { error: 'SETTLEMENT_PENDING', message: 'Do not create a second payment.' },
+  ])('authenticates an error-shaped payment control result before acting on it', async body => {
+    const result = await signed({ body, args: cleanArgs, proof: { outcome: 'allowed' } });
+    result.isError = true; // The MCP transport sets this after the handler signs.
+    expect(await check(result)).toBeNull();
+    const unsigned = { content: result.content, isError: true };
+    await expect(check(unsigned)).rejects.toThrow(/proof/i);
+    result.content![0]!.text = JSON.stringify({ ...body, altered: true });
+    await expect(check(result)).rejects.toThrow(/binding/i);
+  });
 });

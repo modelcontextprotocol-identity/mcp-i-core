@@ -78,6 +78,7 @@ beforeAll(async () => {
     MERCHANT_DID: merchantDid, MERCHANT_PRIVATE_KEY_BASE64: merchantKeys.privateKey, MERCHANT_PUBLIC_KEY_BASE64: merchantKeys.publicKey,
     AGENT_DID: agentDid, AGENT_ED25519_PRIVATE_KEY_BASE64: agentKeys.privateKey, AGENT_ED25519_PUBLIC_KEY_BASE64: agentKeys.publicKey,
     GOOGLE_CLIENT_ID: '', KEY_WEBAUTHN: '0', CONSENT_WEBAUTHN: '0', KEY_SETUP: '0', OFFLINE: '0', AUDIT_WITNESS: '0',
+    COMMERCE_PAYMENTS: '1', PAYMENT_MODE: 'sandbox', X402_PAY_TO: '0x000000000000000000000000000000000000dEaD', X402_ATOMIC_UNITS_PER_CHF_CENT: '10000',
   })) vi.stubEnv(key, value);
   const rpModule = await import('../src/rp/server.js');
   const { ensureStatusList } = await import('../src/rp/statuslist.js');
@@ -145,7 +146,7 @@ describe('Claude connector at /agent/mcp', () => {
     const { result } = await response.json();
     expect(result.tools.map((tool: { name: string }) => tool.name)).toEqual(['browse_catalog', 'place_order']);
     const orderTool = result.tools.find((tool: { name: string }) => tool.name === 'place_order');
-    expect(Object.keys(orderTool.inputSchema.properties).sort()).toEqual(['product', 'quantity']);
+    expect(Object.keys(orderTool.inputSchema.properties).sort()).toEqual(['checkout_id', 'payment_method', 'payment_protocol', 'product', 'quantity']);
     expect(JSON.stringify(result)).not.toMatch(/_kyaos|privateKey|resumeToken/);
   });
 
@@ -255,6 +256,51 @@ describe('Claude connector at /agent/mcp', () => {
     expect(textOf(parallel[1]!)).toContain('CHF 39.80');
     expect((await state()).orders).toBe(3);
 
+    // Exercise the actual connector schema and dispatch, not just the internal
+    // agent helper: each paid flow still enters the same verifier over HTTP.
+    const paid = await callTool('place_order', { product: 'risotto', quantity: 2, payment_protocol: 'x402' });
+    expect(paid.isError, textOf(paid)).toBeFalsy();
+    expect(textOf(paid)).toContain('Payment: simulated (sandbox, no funds moved)');
+    expect((await state()).orders).toBe(4);
+    let orders = 4;
+    for (const rail of ['x402', 'sandbox-token']) {
+      const review = await callTool('place_order', { product: 'risotto', quantity: 2, payment_protocol: 'ucp', payment_method: rail });
+      expect(review.isError, textOf(review)).toBeFalsy();
+      const handoff = JSON.parse(textOf(review));
+      expect(handoff.protocol).toBe('ucp');
+      expect(handoff.checkout_id).toBe(handoff.checkoutId);
+      expect((await state()).orders).toBe(orders);
+
+      // An explicit protocol downgrade must not turn this checkout into an
+      // unpaid order or skip the human's exact-terms confirmation.
+      const downgraded = await callTool('place_order', { product: 'risotto', quantity: 2, checkout_id: handoff.checkout_id, payment_protocol: 'order-only' });
+      expect(downgraded.isError, textOf(downgraded)).toBe(true);
+      expect((await state()).orders).toBe(orders);
+      const stillWaiting = await callTool('place_order', { product: 'risotto', quantity: 2, checkout_id: handoff.checkout_id });
+      expect(JSON.parse(textOf(stillWaiting)).continue_url).toBe(handoff.continue_url);
+      expect((await state()).orders).toBe(orders);
+
+      const reviewUrl = new URL(handoff.continue_url);
+      expect(reviewUrl.origin).toBe(merchantOrigin);
+      const reviewPage = await (await fetch(reviewUrl)).text();
+      const digest = /name="terms_digest" value="([^"]+)"/.exec(reviewPage)![1]!;
+      const confirmed = await fetch(`${merchantOrigin}${reviewUrl.pathname}/confirm`, { method: 'POST', headers: { Origin: merchantOrigin },
+        body: new URLSearchParams({ token: reviewUrl.searchParams.get('token')!, terms_digest: digest, confirm: 'yes' }) });
+      expect(confirmed.ok, await confirmed.text()).toBe(true);
+
+      // Claude is told to retry with checkout_id. Infer the original protocol
+      // and payment handler from its own wallet, without requiring repetition.
+      const completed = await callTool('place_order', { product: 'risotto', quantity: 2, checkout_id: handoff.checkout_id });
+      expect(completed.isError, textOf(completed)).toBeFalsy();
+      expect(textOf(completed)).toContain('Payment: simulated (sandbox, no funds moved)');
+      expect(textOf(completed)).toContain(`Checkout: ${handoff.checkout_id}`);
+      orders++;
+      expect((await state()).orders).toBe(orders);
+      const recovered = await callTool('place_order', { product: 'risotto', quantity: 2, checkout_id: handoff.checkout_id });
+      expect(textOf(recovered)).toBe(textOf(completed));
+      expect((await state()).orders).toBe(orders);
+    }
+
     const revoked = await fetch(`${rpOrigin}/api/rp/revoke`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
@@ -263,7 +309,29 @@ describe('Claude connector at /agent/mcp', () => {
     const refused = await order('risotto', 1);
     expect(refused.isError).toBe(true);
     expect(textOf(refused)).toMatch(/revoked/i);
-    expect((await state()).orders).toBe(3);
+    expect((await state()).orders).toBe(6);
+
+    // Losing the local completion response does not erase a paid order.
+    // Authenticated status reads recover it even after the grant was revoked,
+    // and cannot route through the revoked place_order authority gate.
+    const agentJournal = path.join(tmp, 'var', 'agent', 'commerce.json');
+    const paidAttempts = Object.values(JSON.parse(fs.readFileSync(agentJournal, 'utf8'))) as Array<{
+      id: string; remoteId?: string; state: string; lastResult?: unknown;
+    }>;
+    expect(paidAttempts.filter(attempt => attempt.state === 'completed')).toHaveLength(3);
+    for (const attempt of paidAttempts) for (const recoveryState of ['pending', 'submitted']) {
+      const checkouts = JSON.parse(fs.readFileSync(agentJournal, 'utf8'));
+      checkouts[attempt.id].state = recoveryState;
+      checkouts[attempt.id].lastResult = { content: [{ type: 'text', text: '{"error":"SETTLEMENT_PENDING"}' }] };
+      fs.writeFileSync(agentJournal, JSON.stringify(checkouts));
+      const recovered = await callTool('place_order', { product: 'risotto', quantity: 2, checkout_id: attempt.remoteId ?? attempt.id });
+      expect(recovered.isError, textOf(recovered)).toBeFalsy();
+      expect(textOf(recovered)).toContain('Payment: simulated (sandbox, no funds moved)');
+      expect((await state()).orders).toBe(6);
+      const saved = JSON.parse(fs.readFileSync(agentJournal, 'utf8'))[attempt.id];
+      expect(saved.state).toBe('completed');
+      expect(saved.lastResult._meta['org.kya-os/payment-status'].proof).toBeTruthy();
+    }
 
     const ledger = await (await fetch(`${merchantOrigin}/api/audit/ledger`)).json();
     const types = ledger.entries.map((entry: { eventType: string }) => entry.eventType);

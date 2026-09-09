@@ -40,6 +40,11 @@ DECISION_HEIGHTS = {}
 
 async def assert_console_layout(page, output=None, screenshot_name=None):
     """Measure the actual rendered monitor, including every final decision state."""
+    assert await page.locator('.controls button').evaluate_all('nodes => nodes.map(node => node.id)') == [
+        'btn-discover', 'btn-order', 'btn-wrong', 'btn-overcap', 'btn-retry', 'btn-steal',
+        'btn-revoke', 'btn-verify', 'btn-reset'], 'Fallback controls must follow their numbered sequence'
+    assert await page.locator('.grant-panel .audit-actions button').evaluate_all('nodes => nodes.map(node => node.id)') == [
+        'btn-audit', 'btn-tamper', 'btn-export'], 'Audit controls must put Show audit and Insider edit before Export bundle'
     controls = ['btn-order', 'btn-retry', 'btn-revoke', 'btn-wrong', 'btn-overcap',
                 'btn-steal', 'btn-discover', 'btn-verify', 'btn-reset',
                 'btn-audit', 'btn-tamper', 'btn-export']
@@ -47,6 +52,16 @@ async def assert_console_layout(page, output=None, screenshot_name=None):
         await page.set_viewport_size({'width': width, 'height': height})
         decision_box = await page.locator('.decision-panel').bounding_box()
         grant_box = await page.locator('.grant-panel').bounding_box()
+        grant_body = await page.locator('.grant-panel .panel-body').bounding_box()
+        audit_controls = await page.locator('.audit-controls').bounding_box()
+        assert audit_controls['y'] >= grant_body['y'] + grant_body['height'], 'Audit controls overlap the credential viewport'
+        if width >= 1280:
+            show = await page.locator('#btn-audit').bounding_box()
+            edit = await page.locator('#btn-tamper').bounding_box()
+            export = await page.locator('#btn-export').bounding_box()
+            assert abs(show['y'] - edit['y']) <= 1 and show['x'] + show['width'] < edit['x'], 'Show audit and Insider edit must share the top row'
+            assert export['y'] >= max(show['y'] + show['height'], edit['y'] + edit['height']), 'Export bundle must sit below both audit actions'
+            assert abs(export['x'] - show['x']) <= 1 and abs(export['x'] + export['width'] - edit['x'] - edit['width']) <= 1, 'Export bundle must span the full lower row'
         event_box = await page.locator('.event-panel').bounding_box()
         assert grant_box['x'] + grant_box['width'] < decision_box['x'], f'Delegation is not left of decision at {width}x{height}: {grant_box}, {decision_box}'
         assert grant_box['x'] + grant_box['width'] < event_box['x'], f'Delegation overlaps event feed at {width}x{height}: {grant_box}, {event_box}'
@@ -107,7 +122,7 @@ async def assert_console_layout(page, output=None, screenshot_name=None):
             await page.screenshot(path=str(failure_output / f'console-overlap-{width}x{height}.png'), full_page=True)
         assert not decision_collisions, f'Decision text overlaps at {width}x{height}: {decision_collisions}'
         if width >= 1280 and (await page.locator('#c-cap').inner_text()).strip() != '—':
-            for selector in ['.credential-frame legend', '#c-action-scopes', '#c-scope', '#c-cap', '#c-until', '#bit'] + (['#c-human'] if args.google_identity else []):
+            for selector in ['.credential-frame', '.credential-frame legend', '#c-action-scopes', '#c-scope', '#c-cap', '#c-until', '#bit'] + (['#c-human'] if args.google_identity else []):
                 element = page.locator(selector)
                 await expect(element).to_be_visible()
                 visible_in_panel = await element.evaluate("""element => {
@@ -310,6 +325,21 @@ async def assert_decision_motion(context, merchant, output):
         await page.evaluate('event => window.__motionEvent(event)', {'type': 'reset'})
         assert await page.locator('#decision-cursor').evaluate("node => getComputedStyle(node).animationName") == 'none'
         await assert_console_layout(page)
+        # Payment protocols add distinct states without moving controls or
+        # shrinking the merchant activity viewport. These are display events,
+        # never payment requests against the running fixture.
+        payment_states = [
+            ('payment-required', {'type': 'verdict', 'verdict': 'denied', 'elapsedMs': 12,
+                                  'body': {'error': 'PAYMENT_REQUIRED'}}),
+            ('checkout-review', {'type': 'checkout.review', 'id': 'layout-checkout',
+                                 'url': merchant + '/checkout/layout-checkout?token=layout-only',
+                                 'expiresAt': '2099-01-01T00:00:00.000Z'}),
+            ('settlement-pending', {'type': 'verdict', 'verdict': 'denied', 'elapsedMs': 12,
+                                    'body': {'error': 'SETTLEMENT_PENDING'}}),
+        ]
+        for name, event in payment_states:
+            await page.evaluate('event => window.__motionEvent(event)', event)
+            await assert_console_layout(page, output, 'console-' + name)
     finally:
         await page.close()
 
@@ -344,6 +374,121 @@ async def assert_credential_details(page, credential, output):
     await page.locator('.grant-details').evaluate('node => { node.open = false; }')
     await page.locator('.grant-panel .panel-body').evaluate('node => { node.scrollTop = 0; }')
     await page.set_viewport_size({'width': 1440, 'height': 900})
+
+
+async def assert_live_audit_editor(page, context, merchant, output, state, report):
+    """Edit the last anchored entry through the UI, retaining real verification."""
+    snapshot = await (await context.request.get(merchant + '/api/audit/ledger')).json()
+    anchored = [entry for entry in snapshot['entries'] if entry['anchored']]
+    assert anchored, 'The live editor needs an anchored entry to demonstrate tamper detection'
+    target = anchored[-1]
+    before = target['outcome']
+    after = 'failed' if before != 'failed' else 'succeeded'
+    action_requests = []
+    def track_action(request):
+        if request.method == 'POST' and request.url.startswith(merchant + '/api/act/'):
+            action_requests.append({'url': request.url, 'body': request.post_data_json})
+    page.on('request', track_action)
+    release = asyncio.Event()
+    response_ready = asyncio.get_running_loop().create_future()
+    async def delay_edit_response(route):
+        response = await route.fetch()
+        response_ready.set_result((response.status, await response.json()))
+        await release.wait()
+        await route.fulfill(response=response)
+    try:
+        await expect(page.locator('#audit-edit')).to_be_visible()
+        await expect(page.locator('#audit-edit')).to_be_enabled()
+        started = time.monotonic()
+        await page.keyboard.press('t')
+        await expect(page.locator('#audit-editor')).to_be_visible(timeout=1000)
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        assert not action_requests, 'Opening the cached editor must not wait for another checkpoint or submit a forgery'
+        await page.locator('#audit-edit-entry').select_option(target['seq'])
+        await expect(page.locator('#audit-edit-outcome')).to_have_value(before)
+        await expect(page.locator('#audit-edit-before')).to_contain_text(before)
+        await expect(page.locator('#audit-edit-done')).to_be_disabled()
+        assert await page.locator('#audit-edit-entry option').evaluate_all('nodes => nodes.map(node => node.value)') == [entry['seq'] for entry in anchored], 'Only checkpointed entries may be selected'
+        assert set(await page.locator('#audit-edit-outcome option').evaluate_all('nodes => nodes.map(node => node.value)')) == {'succeeded', 'failed', 'denied', 'challenged', 'unknown'}
+        await page.locator('#audit-edit-outcome').focus()
+        await page.keyboard.press('t')
+        await page.keyboard.press('1')
+        await page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        assert not action_requests, 'Typing in the outcome control fired a global demo shortcut'
+        await expect(page.locator('#audit-editor')).to_be_visible()
+        await page.locator('#audit-edit-outcome').select_option(after)
+        await expect(page.locator('#audit-edit-done')).to_be_enabled()
+        await page.locator('#audit-edit-cancel').click()
+        await expect(page.locator('#audit-editor')).not_to_be_visible()
+        assert not action_requests, 'Cancelling an edit submitted a mutation'
+        await expect(page.locator('#audit-table tr.forged')).to_have_count(0)
+        await page.locator('#audit-edit').click()
+        await expect(page.locator('#audit-editor')).to_be_visible(timeout=1000)
+        await page.locator('#audit-edit-entry').select_option(target['seq'])
+        await page.locator('#audit-edit-outcome').select_option(after)
+        for width, height in [(1440, 900), (1280, 720)]:
+            await page.set_viewport_size({'width': width, 'height': height})
+            for selector in ['#audit-edit-entry', '#audit-edit-outcome', '#audit-edit-done', '#audit-edit-cancel']:
+                control = page.locator(selector)
+                box = await control.bounding_box()
+                assert box and box['x'] >= 0 and box['x'] + box['width'] <= width and box['y'] >= 0 and box['y'] + box['height'] <= height, f'Audit editor control {selector} is outside {width}x{height}: {box}'
+                assert await control.evaluate('node => { const box = node.getBoundingClientRect(); const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2); return top === node || node.contains(top); }'), f'Audit editor control {selector} is covered at {width}x{height}'
+            await page.screenshot(path=str(output / f'console-audit-editor-{width}x{height}.png'), full_page=True)
+        await page.set_viewport_size({'width': 1440, 'height': 900})
+        await page.screenshot(path=str(output / 'console-audit-editor.png'), full_page=True)
+        await page.route(merchant + '/api/act/tamper', delay_edit_response, times=1)
+        await page.locator('#audit-edit-done').click()
+        try:
+            await expect(page.locator('#audit-edit-done')).to_be_disabled()
+            await expect(page.locator('#audit-edit-feedback')).to_be_visible(timeout=1000)
+            assert (await page.locator('#audit-edit-feedback').inner_text()).strip(), 'A pending edit needs visible feedback'
+            await expect(page.locator('#audit-table tr.forged')).to_have_count(0)
+            await page.screenshot(path=str(output / 'console-audit-editor-verifying.png'), full_page=True)
+            status, tamper = await asyncio.wait_for(response_ready, timeout=30)
+            assert status == 200, tamper
+            assert len(action_requests) == 1 and action_requests[0] == {
+                'url': merchant + '/api/act/tamper',
+                'body': {'sequence': target['seq'], 'outcome': after, 'checkpointDigest': snapshot['checkpoint']['checkpointDigest']},
+            }, action_requests
+            assert tamper['target']['seq'] == target['seq'] and tamper['target']['before'] == before and tamper['target']['after'] == after, tamper['target']
+            assert tamper['chainBreaksAt'] is None, 'The final entry has no successor that can exhibit a predecessor mismatch'
+            assert tamper['forgedReceiptVerifies'] is True and tamper['forgedInclusion'] is False and tamper['rootsMatch'] is False
+            assert tamper['reports']['tampered']['chainIntegrity']['verdict'] == 'valid', tamper['reports']['tampered']['chainIntegrity']
+            assert tamper['reports']['tampered']['checkpointIntegrity']['verdict'] == 'invalid', tamper['reports']['tampered']['checkpointIntegrity']
+            # The real server has finished, but its response is deliberately withheld.
+            # The table must not pretend verification completed before receiving it.
+            await expect(page.locator('#audit-table tr.forged')).to_have_count(0)
+        finally:
+            release.set()
+        await expect(page.locator('#audit-table tr.forged')).to_have_count(1)
+        await expect(page.locator('#ledger-row-' + target['seq'] + ' .out s')).to_have_text(before)
+        await expect(page.locator('#ledger-row-' + target['seq'] + ' .out')).to_contain_text(after)
+        await expect(page.locator('#audit-chain-note')).not_to_contain_text('broken')
+        await expect(page.locator('#audit-verdicts .verdict[title^="chainIntegrity:"]')).to_have_class('verdict valid')
+        await expect(page.locator('#audit-verdicts .verdict[title^="checkpointIntegrity:"]')).to_have_class('verdict invalid')
+        await expect(page.locator('#audit-tamper')).not_to_contain_text('PREDECESSOR_MISMATCH')
+        await page.screenshot(path=str(output / 'console-audit-editor-detected.png'), full_page=True)
+        (output / 'audit-live-edit-report.json').write_text(json.dumps({'editorOpenedMs': elapsed_ms, 'selection': action_requests[0]['body'], 'result': tamper}, indent=2))
+        report['checks'].append(f'Cached audit editor opens with T in {elapsed_ms} ms without network work; native select typing does not fire demo shortcuts; Cancel leaves the ledger unchanged')
+        report['checks'].append('Done sends the selected anchored sequence, outcome and checkpoint digest; delayed real verification keeps feedback visible and never paints a forged result early')
+        report['checks'].append('Editing the final anchored entry shows the exact before/after outcome, valid signatures and chain, and invalid checkpoint proofs without claiming a nonexistent successor mismatch')
+        response = await context.request.post(merchant + '/api/act/export', data={})
+        assert response.ok, await response.text()
+        honest = json.loads((state / 'var/audit/bundle.json').read_text())
+        edited = json.loads((state / 'var/audit/bundle.tampered.json').read_text())
+        entries = lambda bundle: next(component['content'] for component in bundle['components'] if component['path'] == 'entries.json')
+        honest_entries, edited_entries = entries(honest), entries(edited)
+        differences = [(original, forged) for original, forged in zip(honest_entries, edited_entries) if original != forged]
+        assert len(honest_entries) == len(edited_entries) and len(differences) == 1, 'Export must contain exactly the demonstrated edit'
+        original, forged = differences[0]
+        assert original['core']['sequence'] == forged['core']['sequence'] == target['seq']
+        assert original['core']['event']['outcome'] == before and forged['core']['event']['outcome'] == after, 'Export silently changed the presenter-selected outcome'
+        current = await (await context.request.get(merchant + '/api/audit/ledger')).json()
+        assert current['entries'] == snapshot['entries'], 'The isolated edited bundle must not rewrite the honest merchant ledger'
+        report['checks'].append('Export preserves exactly the selected live edit while the honest merchant ledger and honest bundle retain the original event')
+    finally:
+        release.set()
+        page.remove_listener('request', track_action)
 
 
 async def browser_check(merchant, rp, output, state):
@@ -384,6 +529,7 @@ async def browser_check(merchant, rp, output, state):
             for extra in extra_monitors:
                 await extra.close()
         await assert_decision_motion(context, merchant, output)
+        report['checks'].append('Payment required, exact checkout review and unresolved settlement have distinct readable states; long codes wrap at underscores and all controls remain visible')
         report['checks'].append('Controlled SSE timing verifies initial and repeated decryption, a visible same-frame result cue, READY cursor, immediate semantic decisions, fixed text geometry, stale-timer cancellation, resize recovery and reduced-motion')
         await expect(console_page.locator('#btn-revoke')).to_be_disabled()
         await expect(console_page.locator('#seal')).to_have_text('READY')
@@ -754,10 +900,9 @@ async def browser_check(merchant, rp, output, state):
         await expect(page.locator('#audit-status')).not_to_be_visible()
         await expect(page.locator('#audit-overlay')).to_have_attribute('aria-busy', 'false')
         await page.screenshot(path=str(output / 'console-audit-ready.png'), full_page=True)
+        await assert_live_audit_editor(page, context, merchant, output, state, report)
         await page.locator('#audit-close').click()
         report['checks'].append('Show audit opens immediately while a real checkpoint response is delayed; closing it stays closed when the response arrives, and reopening displays the verified report')
-        response = await context.request.post(merchant + '/api/act/export', data={})
-        assert response.ok, await response.text()
         for filename, code in [('bundle.json', 0), ('bundle.tampered.json', 1)]:
             result = subprocess.run(['python3', str(ROOT / 'scripts/verify-ledger.py'), str(state / 'var/audit' / filename), '--keys', str(state / 'var/audit/keys.json'), '--quiet'], capture_output=True, text=True)
             assert result.returncode == code, result.stdout + result.stderr

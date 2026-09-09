@@ -74,6 +74,7 @@ function safeAgentDid(): string | null {
 }
 
 export interface AgentOrderOutcome {
+  checkoutId?: string;
   result: MerchantToolResult;
   elapsedMs: number;
   agentDid: string;
@@ -95,19 +96,27 @@ export interface AgentOrderOptions {
   credential?: DelegationCredential | null;
   /** Theft simulation: present the REAL credential, sign the proof with a fresh key. */
   forge?: boolean;
+  /** Gateway-owned checkout context; never supplied directly by the LLM. */
+  checkout?: { id: string; protocol: 'x402' | 'ucp'; termsDigest?: string };
+  /** Standard x402 MCP transport metadata, bound to the pinned checkout. */
+  payment?: Record<string, unknown>;
 }
 // One single-user gateway owns this store. Serialize its application transitions
 // across stateless MCP connections so overlapping challenge/pickup requests
 // cannot overwrite each other's pending grant.
 let orderTail: Promise<unknown> = Promise.resolve();
-export function runAgentOrder(options: AgentOrderOptions): Promise<AgentOrderOutcome> {
-  if (options.credential !== undefined) return performAgentOrder(options);
-  const next = orderTail.then(() => performAgentOrder(options));
+export function serializeAgentOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const next = orderTail.then(operation);
   orderTail = next.catch(() => {});
   return next;
 }
-async function performAgentOrder(options: AgentOrderOptions): Promise<AgentOrderOutcome> {
-  const serverUrl = options.serverUrl ?? `${merchantOrigin()}/mcp`;
+export function runAgentOrder(options: AgentOrderOptions): Promise<AgentOrderOutcome> {
+  if (options.credential !== undefined) return performAgentOrder(options);
+  return serializeAgentOperation(() => performAgentOrder(options));
+}
+
+/** Shared pickup and proof preparation for MCP and UCP transports. */
+export async function prepareAgentOrder(options: AgentOrderOptions) {
   let identity = options.identity ?? loadAgentIdentity();
   if (options.forge) {
     const stolen = await cryptoProvider.generateKeyPair();
@@ -136,14 +145,14 @@ async function performAgentOrder(options: AgentOrderOptions): Promise<AgentOrder
     } else if (pickup['state'] === 'pending' && state.challengeResult) {
       // This is the previously verified challenge, not a new merchant decision.
       // Keep its URL stable while the human is approving it.
-      return { result: state.challengeResult, elapsedMs: 0, agentDid: identity.did,
-        presented: { product: options.product, quantity, credentialId: null, audience } };
+      return { identity, audience, credential: null, quantity, args: null, pendingResult: state.challengeResult };
     } else if (['denied', 'expired', 'failed'].includes(String(pickup['state']))) {
       state = {};
       saveAgentState(state);
     } else throw new Error('CONSENT_PROTOCOL_INVALID: unexpected pickup state');
   }
   const args: Record<string, unknown> = { product: options.product, quantity,
+    ...(options.checkout ? { checkout: options.checkout } : {}),
     ...(credential ? { _kyaos_delegation: credential } : {}),
   };
   args['_kyaos_proof'] = await generateRequestProof({
@@ -153,30 +162,40 @@ async function performAgentOrder(options: AgentOrderOptions): Promise<AgentOrder
     args,
     audience,
   });
+  return { identity, audience, credential, quantity, args, pendingResult: null };
+}
+
+/** Validates signed merchant evidence before any payment or consent action. */
+export async function acceptMerchantOrderResult(result: MerchantToolResult, args: Record<string, unknown>, identity: KeyedIdentity, audience: string, saveChallenge = true): Promise<void> {
+  const consentOrigin = new URL(rpOrigin());
+  if (consentOrigin.hostname === 'localhost') consentOrigin.hostname = '127.0.0.1';
+  await verifyMerchantOrderResponse(result, { args, merchantDid: audience, agentDid: identity.did,
+    consentOrigin: consentOrigin.origin, scope: SCOPE_PRODUCT_CLASS });
+  if (saveChallenge && responseBody(result)['error'] === 'needs_authorization') {
+    saveAgentState({ pending: responseBody(result) as unknown as ConsentChallenge, challengeResult: result });
+  }
+}
+
+/** Caller must hold serializeAgentOperation when using the shared wallet. */
+export async function performAgentOrder(options: AgentOrderOptions): Promise<AgentOrderOutcome> {
+  const serverUrl = options.serverUrl ?? `${merchantOrigin()}/mcp`;
+  const { identity, audience, credential, quantity, args, pendingResult } = await prepareAgentOrder(options);
+  const presented = { product: options.product, quantity, credentialId: credential?.id ?? null, audience };
+  if (pendingResult) return { result: pendingResult, elapsedMs: 0, agentDid: identity.did, presented };
 
   const client = new Client({ name: 'shopping-agent', version: '0.1.0' });
   const transport = new StreamableHTTPClientTransport(new URL(serverUrl));
   const started = Date.now();
   await client.connect(transport);
   try {
-    const result = await client.callTool({ name: 'place_order', arguments: args }) as MerchantToolResult;
-    const consentOrigin = new URL(rpOrigin());
-    if (consentOrigin.hostname === 'localhost') consentOrigin.hostname = '127.0.0.1';
-    await verifyMerchantOrderResponse(result, {
-      args, merchantDid: audience, agentDid: identity.did,
-      consentOrigin: consentOrigin.origin, scope: SCOPE_PRODUCT_CLASS,
-    });
-    if (local && !options.forge) {
-      const body = responseBody(result);
-      if (body['error'] === 'needs_authorization') {
-        saveAgentState({ pending: body as unknown as ConsentChallenge, challengeResult: result });
-      }
-    }
+    const result = await client.callTool({ name: 'place_order', arguments: args!,
+      ...(options.payment ? { _meta: { 'x402/payment': options.payment } } : {}) }) as MerchantToolResult;
+    await acceptMerchantOrderResult(result, args!, identity, audience, options.credential === undefined && !options.forge);
     return {
       result: result as AgentOrderOutcome['result'],
       elapsedMs: Date.now() - started,
       agentDid: identity.did,
-      presented: { product: options.product, quantity, credentialId: credential?.id ?? null, audience },
+      presented,
     };
   } finally {
     await client.close();

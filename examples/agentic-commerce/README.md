@@ -9,7 +9,12 @@ A consent reference inside the signed delegation connects the two histories.
 
 Built for the GS1/W3C workshop **Ecommerce for Humans and AI Agents**, Zurich, 9 September 2026.
 Talk: **From Agent-Visible to Agent-Actionable: KYA-OS, a Rail-Agnostic Trust Layer for E-commerce**.
-This demonstration places orders; it does not move money or integrate a payment rail.
+The default flow places demonstration orders without payment.
+Optional x402 and UCP paths are disabled unless the operator sets `COMMERCE_PAYMENTS=1`.
+With the switch unset or `0`, Claude sees the original order-only tool, and the merchant does not initialize or expose checkout/payment endpoints.
+When enabled, sandbox is the default: x402 verifies real payment signatures locally without moving funds; a second UCP payment handler uses an explicitly simulated checkout-bound token.
+An optional Base Sepolia USDC mode uses testnet settlement only.
+See [payment protocols, configuration and exact Claude prompts](docs/payment-protocols.md).
 
 ## Start here
 
@@ -54,6 +59,7 @@ Stop the previous demo with `Ctrl+C` first.
 This command checks for occupied demo ports before changing state, prepares a fresh run, then starts both services.
 `R` on the console revokes the current RP grant, clears the gateway’s own grant cache and invalidates pending consent sessions without restarting the services.
 It never issues a replacement grant; the next request needs human approval.
+It preserves payment attempts, the payment wallet and merchant checkout history, so resetting consent cannot erase an unresolved settlement.
 Restarting starts a fresh merchant in-memory ledger; the RP replays retained consent events into a new ledger epoch.
 If using Google, sign in after the final restart: Google sessions and pending logins are intentionally in memory; account references and registered keys persist.
 
@@ -82,7 +88,29 @@ Pinned Claude prompt, with exact tool, GTIN, URI, quantity and cap:
 Say: “The human grants authority for this product class, to this merchant, up to this amount, until this time.”
 After revocation: “The agent still has its key; its authority has been withdrawn.”
 For the audit: “The evidence includes the human decision and what the merchant actually allowed or refused.”
-If there is time, press `T` to show that an insider edit fails verification even after the forged entry is re-signed.
+If there is time, press `T` or choose **Edit entry**, select a checkpointed entry and change its outcome, then click **Done · verify edit**.
+The console re-signs an edited copy and shows the verifier's actual results against the original checkpoint.
+Editing the final entry has no following chain link to break; its checkpoint and inclusion proof still detect the change.
+`E` exports the exact edited copy you just demonstrated, alongside the original snapshot.
+
+## Add x402 and UCP to the same demonstration
+
+Keep `COMMERCE_PAYMENTS=0` for the original workshop flow.
+To rehearse payments, start with `COMMERCE_PAYMENTS=1 PAYMENT_MODE=sandbox npm run demo` and refresh Claude's tool connection.
+The same `place_order` tool then accepts these additional arguments:
+
+| Flow | Tool arguments | Result |
+|---|---|---|
+| Original order | `payment_protocol: "order-only"` or omit it | Signed order receipt; no payment. |
+| x402 payment | `payment_protocol: "x402"` | KYA authorization, x402 challenge, real payment signature, simulated settlement and signed order. |
+| UCP with x402 | `payment_protocol: "ucp", payment_method: "x402"` | Negotiated checkout, human review of exact terms, then the same KYA gate and x402 payment handler. |
+| UCP with sandbox token | `payment_protocol: "ucp", payment_method: "sandbox-token"` | Same checkout and KYA gate with a different, explicitly simulated payment handler. |
+
+For each flow, use `product: "risotto", quantity: 2` and retain the returned `checkout_id` for continuations.
+Ask Claude to stop at a human authorization URL or checkout `continue_url`; the human approves through the page, then asks Claude to resume that checkout.
+UCP is a checkout protocol that can select payment handlers; it is not itself a payment rail.
+The `org.kya-os.delegation` checkout extension is this example's candidate integration, not an adopted UCP extension or an AP2 mandate implementation.
+The [payment runbook](docs/payment-protocols.md) supplies copyable prompts, wire formats, public-origin settings, and recovery instructions.
 
 The consent page's primary action is **Approve grant**, its secondary action is **Deny**.
 Deny consumes that pending consent decision and issues no credential.
@@ -117,7 +145,7 @@ The console buttons are another deterministic MCP client:
 | `K` | Revoke the active grant on the RP status list. |
 | `V` | Verify the last allowed receipt with independent Python code. |
 | `A` | Anchor and witness the audit ledger. |
-| `T` | Attempt an insider edit against the witnessed ledger. |
+| `T` | Open the insider editor; choose an entry and outcome, then Done verifies the edited copy. |
 | `E` | Export honest and tampered bundles and verification reports. |
 | `R` | Clear the active grant; require fresh human consent. |
 | `P` / `C` | Presenter mode / higher contrast. |
@@ -132,7 +160,7 @@ Both MCP endpoints use stateless Streamable HTTP and start with `npm run demo`.
 
 | Endpoint | Purpose |
 |---|---|
-| `http://localhost:4949/agent/mcp` | Connect Claude here: **browse_catalog** and **place_order**, with the gateway holding the shopping agent's key and grant. |
+| `http://localhost:4949/agent/mcp` | Connect Claude here: **browse_catalog** and **place_order**; the gateway holds the agent's key and grant. Payment arguments and a payment wallet are available only with `COMMERCE_PAYMENTS=1`. |
 | `http://localhost:4949/mcp` | The protected merchant MCP server: **get_catalog** and **place_order**, requiring the agent's holder proof for an order or consent challenge. |
 | `http://localhost:4950/` | The Responsible Party's human consent, passkey and revocation hub; this is not an MCP endpoint. |
 
@@ -175,7 +203,10 @@ The human must decide within the ten-minute challenge window, and a decision can
 An approved credential remains recoverable after that deadline through repeatable pickup with a fresh agent proof.
 Its own validity window and current revocation status still govern order authorization.
 A lost order response does not disable the grant or trigger an automatic order retry.
-This demo does not implement transaction idempotency: a new request with a fresh proof is a new order, so an uncertain earlier result needs reconciliation before repeating that purchase.
+The original order-only path has no transaction idempotency: a new request with a fresh proof creates a new order.
+The x402 and UCP paths instead persist checkout IDs, payment authorizations and committed results for recovery of the same purchase.
+An unresolved settlement remains on hold; starting a different checkout or generating a new payment nonce is not a safe recovery action.
+See [durable payment state and recovery](docs/payment-protocols.md#durable-state-and-recovery).
 
 **Stateless refers to the MCP transport:** each HTTP request is handled independently, with no `Mcp-Session-Id` or remembered MCP protocol session required.
 The agent's reusable key and delegation, the RP's consent records and the revocation list remain application state.
@@ -312,7 +343,8 @@ The honest bundle must exit **0**.
 The tampered bundle must exit **1** with integrity failures; that deliberate rejection is the expected result.
 The SDK verifier reports separate dimensions for signatures, chain, checkpoint, witness and authorization evidence.
 An `indeterminate` evidence dimension is distinct from an invalid signature or Merkle proof.
-The in-memory journal advertises AAP-1, as enforced by the SDK; the witness is real, but it does not turn this demo into a durable journal.
+The in-memory audit journal advertises AAP-1, as enforced by the SDK; the witness is real, but it does not turn that audit journal into a durable ledger.
+The separate merchant commerce journal persists payment attempts and committed outcomes for recovery; it does not change the audit ledger's advertised durability.
 Both ledgers reuse the same published SDK composition; the status-list resolver, GS1 policy and verifier scripts remain the source of truth.
 
 ## Recorded fallback and browser rehearsal

@@ -100,6 +100,13 @@ export interface AuditReport {
 
 export interface Dimension { verdict: 'valid' | 'invalid' | 'indeterminate'; reasonCodes: string[] }
 
+export interface AuditInsiderEdit {
+  sequence: string;
+  outcome: SignedAuditEntryV1['core']['event']['outcome'];
+  /** The checkpoint the human is viewing, never a silently newer snapshot. */
+  checkpointDigest: string;
+}
+
 export interface TamperReport {
   target: { seq: string; eventType: string; before: string; after: string; reason: string | null };
   attacker: string;
@@ -121,6 +128,8 @@ export interface ExportResult {
   reports: { honest: AuditVerificationReportV1; tampered: AuditVerificationReportV1 };
   bundleId: string;
   manifestDigest: string;
+  checkpointDigest: string;
+  target: TamperReport['target'];
   components: Array<{ path: string; mediaType: string; size: string; digest: string }>;
 }
 
@@ -144,8 +153,8 @@ export interface PartyAudit {
   anchor(): Promise<AnchorResult>;
   report(): Promise<AuditReport>;
   /** An insider WITH the merchant key edits one entry: what still breaks. */
-  tamper(): Promise<TamperReport>;
-  /** Write bundle + policy + keys to var/audit and re-verify both with the SDK verifier. */
+  tamper(edit?: AuditInsiderEdit): Promise<TamperReport>;
+  /** Export the demonstrated snapshots, policy, keys, and SDK verification results. */
   exportBundle(): Promise<ExportResult>;
   /** The honest replay bundle (for download). */
   bundle(): Promise<AuditReplayBundleV1>;
@@ -161,6 +170,14 @@ export interface PartyAuditOptions {
   resolvePublicKeyBase64?: (signer: SignerRef) => Promise<string | null>;
   auditDir?: string;
   clock?: { now(): number };
+}
+
+interface AuditMaterial {
+  all: SignedAuditEntryV1[];
+  anchor: AnchorResult;
+  policy: AuditVerificationPolicyV1;
+  keys: { keys: Array<{ kid: string; jwk: Record<string, unknown> }> };
+  honest: AuditReplayBundleV1;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +253,8 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
   const builder = new AuditCheckpointBuilder({ journal, store, signer, hasher, clock });
   let latest: AnchorResult | null = null;
   let lastWitnessed: SignedAuditCheckpointV1 | null = null;
+  let materialCache: { key: string; value: Promise<AuditMaterial> } | null = null;
+  let lastDemonstration: { material: AuditMaterial; tampered: AuditReplayBundleV1; report: TamperReport } | null = null;
 
   const entries = () => journal.snapshot(ledger);
 
@@ -244,6 +263,9 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     if (all.length === 0) throw new Error('nothing to anchor yet — run a beat first');
     const checkpoint = await builder.createCheckpoint(ledger); // idempotent at the same tree size
     const created = latest?.checkpoint.checkpointDigest !== checkpoint.checkpointDigest;
+    // A new anchor starts a new demonstration. Merely appending live events
+    // leaves the displayed experiment and its downloadable evidence intact.
+    if (created) lastDemonstration = null;
     let witness: AuditObservationReceiptV1 | null = created ? null : (latest?.witness ?? null);
     let witnessError: string | null = null;
     if (options.witnessUrl && !witness) {
@@ -270,13 +292,16 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
   }
 
   async function report(): Promise<AuditReport> {
+    // Pin all anchor evidence before yielding. A concurrent Show audit may
+    // publish another checkpoint while the inclusion proofs are computing.
+    const anchorSnapshot = structuredClone(latest);
     const all = await entries();
     // Each report is one immutable snapshot. The SDK still constructs and
     // verifies every proof; shared subtree roots avoid hashing the ledger
     // again for every leaf. The cache is discarded after this report.
     const reportTree = new SnapshotMerkleTree(hasher);
     const leaves = all.map((e) => e.entryDigest);
-    const cp = latest?.checkpoint ?? null;
+    const cp = anchorSnapshot?.checkpoint ?? null;
     const anchoredSize = cp ? Number(cp.core.treeSize) : 0;
     const anchoredLeaves = leaves.slice(0, anchoredSize);
     const root = cp?.core.rootDigest ?? null;
@@ -292,7 +317,7 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     }
     let chainIntact = all.length > 0;
     for (let i = 1; i < all.length; i++) if (all[i]!.core.previousEntryDigest !== all[i - 1]!.entryDigest) chainIntact = false;
-    const w = latest?.witness ?? null;
+    const w = anchorSnapshot?.witness ?? null;
     return {
       ledger,
       recorder: recorderRef,
@@ -304,7 +329,7 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
       entries: all.map((e, i) => row(e, i < anchoredSize)),
       checkpoint: cp ? { treeSize: cp.core.treeSize, rootDigest: cp.core.rootDigest, checkpointDigest: cp.checkpointDigest, createdAt: cp.core.createdAt, previousCheckpointDigest: cp.core.previousCheckpointDigest, jws: cp.jws } : null,
       witness: w ? { observerId: w.core.observerId, observer: w.core.observer, observedAt: w.core.observedAt, observationDigest: w.observationDigest, checkpointDigest: w.core.checkpointDigest, treeSize: w.core.treeSize } : null,
-      witnessError: latest?.witnessError ?? null,
+      witnessError: anchorSnapshot?.witnessError ?? null,
       tree: anchoredLeaves.length ? await renderTree(reportTree, anchoredLeaves) : [],
       inclusions,
       allIncluded: inclusions.length > 0 && inclusions.every((i) => i.included),
@@ -341,6 +366,9 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     const size = Number(checkpoint.core.treeSize);
     const covered = input.entries.slice(0, size);
     const leaves = covered.map((e) => e.entryDigest);
+    // All proofs belong to this immutable bundle snapshot. The SDK computes
+    // each path; sharing its subtree roots avoids quadratic ledger hashing.
+    const bundleTree = new SnapshotMerkleTree(hasher);
     const inclusionProofs = [];
     for (let i = 0; i < covered.length; i++) {
       inclusionProofs.push({
@@ -348,7 +376,7 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
         sequence: covered[i]!.core.sequence,
         entryDigest: covered[i]!.entryDigest,
         checkpointDigest: checkpoint.checkpointDigest,
-        proof: { leafIndex: String(i), treeSize: checkpoint.core.treeSize, auditPath: (await tree.inclusionProof(leaves, i)).map(String) },
+        proof: { leafIndex: String(i), treeSize: checkpoint.core.treeSize, auditPath: (await bundleTree.inclusionProof(leaves, i)).map(String) },
       });
     }
     const exporter = new AuditReplayBundleExporter({ hasher, signer, clock });
@@ -374,38 +402,51 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
   }
 
   /** Anchor if needed, then everything a verifier needs, honest and forged. */
-  async function materialize() {
+  async function materialize(pinned?: AnchorResult): Promise<AuditMaterial> {
     const all = await entries();
-    const a = latest && latest.checkpoint.core.treeSize === String(all.length) ? latest : await anchor();
-    const covered = all.slice(0, Number(a.checkpoint.core.treeSize));
-    const policy = await policyFor(a.witness);
-    const keys = await keysFor(a.witness);
-    const stamp = a.checkpoint.core.treeSize;
-    const honest = await buildBundle({ entries: covered, checkpoint: a.checkpoint, witness: a.witness, policy, bundleId: `urn:kya-os:example:agentic-commerce:bundle:${ledger.ledgerEpochId}:${stamp}` });
-    return { all: covered, anchor: a, policy, keys, honest };
+    const current = pinned ?? (latest && latest.checkpoint.core.treeSize === String(all.length) ? latest : await anchor());
+    const key = `${current.checkpoint.checkpointDigest}:${current.witness?.observationDigest ?? ''}`;
+    if (materialCache?.key === key) return materialCache.value;
+    const a = structuredClone(current);
+    // Recording may have continued while anchor() contacted its witness.
+    // Read the immutable checkpoint prefix after choosing that checkpoint.
+    const covered = structuredClone((await entries()).slice(0, Number(a.checkpoint.core.treeSize)));
+    const value = (async (): Promise<AuditMaterial> => {
+      const [policy, keys] = await Promise.all([policyFor(a.witness), keysFor(a.witness)]);
+      const stamp = a.checkpoint.core.treeSize;
+      const honest = await buildBundle({ entries: covered, checkpoint: a.checkpoint, witness: a.witness, policy, bundleId: `urn:kya-os:example:agentic-commerce:bundle:${ledger.ledgerEpochId}:${stamp}` });
+      return { all: covered, anchor: a, policy, keys, honest };
+    })();
+    materialCache = { key, value };
+    try { return await value; }
+    catch (error) { if (materialCache?.value === value) materialCache = null; throw error; }
   }
 
   /**
    * The insider: has the merchant's signing key and write access to the journal.
-   * Edits the most incriminating line (the first refusal), recomputes the event
+   * Edits the selected line (or the latest refusal), recomputes the event
    * and entry digests, re-signs the receipt, and re-exports a bundle with a
    * fresh manifest signature. Everything under their control is consistent —
    * and it is still caught, because the NEXT entry's `previousEntryDigest`, the
    * checkpoint root the room saw, and the RP's witness receipt all commit to the
-   * honest digest.
+   * honest digest. A final entry has no successor to break; the checkpoint
+   * still detects its changed digest.
    */
-  async function forge(all: SignedAuditEntryV1[]): Promise<{ entries: SignedAuditEntryV1[]; index: number; forged: SignedAuditEntryV1; original: SignedAuditEntryV1 }> {
+  async function forge(all: SignedAuditEntryV1[], edit?: AuditInsiderEdit): Promise<{ entries: SignedAuditEntryV1[]; index: number; forged: SignedAuditEntryV1; original: SignedAuditEntryV1 }> {
     // The most incriminating line: the LATEST refused tool call (after the kill,
     // that is the revoked agent's order) — the one an insider would want gone.
     const refused = (e: SignedAuditEntryV1) => e.core.event.eventType.startsWith('tool.call.') && (e.core.event.outcome === 'denied' || e.core.event.outcome === 'failed');
-    let index = all.length - 1;
-    while (index > 0 && !refused(all[index]!)) index -= 1;
-    if (index <= 0) index = all.length - 1;
+    let index = edit ? all.findIndex(entry => entry.core.sequence === edit.sequence) : all.length - 1;
+    if (!edit) {
+      while (index >= 0 && !refused(all[index]!)) index -= 1;
+      if (index < 0) index = all.length - 1;
+    }
+    if (index < 0) throw new Error('Select an entry included in the displayed checkpoint. This sequence is unknown or unanchored.');
     const original = all[index]!;
+    if (edit?.outcome === original.core.event.outcome) throw new Error('Choose a different outcome to demonstrate an edit.');
     const core = structuredClone(original.core) as SignedAuditEntryV1['core'];
-    const event = core.event as { outcome: string; reason?: unknown };
-    event.outcome = event.outcome === 'succeeded' ? 'failed' : 'succeeded';
-    delete event.reason;
+    const event = core.event;
+    event.outcome = edit?.outcome ?? (event.outcome === 'succeeded' ? 'failed' : 'succeeded');
     core.eventDigest = await digestAuditEvent(hasher, core.event);
     const entryDigest = await digestAuditEntry(hasher, core);
     const receiptCore = buildAuditRecorderReceiptCore(core, entryDigest);
@@ -420,9 +461,18 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     return { entries, index, forged, original };
   }
 
-  async function tamper(): Promise<TamperReport> {
-    const m = await materialize();
-    const { entries: forgedEntries, index, forged, original } = await forge(m.all);
+  async function tamper(edit?: AuditInsiderEdit): Promise<TamperReport> {
+    if (edit !== undefined) {
+      if (!edit || typeof edit !== 'object' || Array.isArray(edit) ||
+          typeof edit.sequence !== 'string' || !/^(0|[1-9]\d*)$/.test(edit.sequence) ||
+          !['succeeded', 'failed', 'denied', 'challenged', 'unknown'].includes(edit.outcome) ||
+          typeof edit.checkpointDigest !== 'string') throw new Error('Provide a sequence, supported outcome, and checkpoint digest.');
+      if (!latest || latest.checkpoint.checkpointDigest !== edit.checkpointDigest) {
+        throw new Error('The displayed checkpoint is missing or has changed. Show audit again before editing.');
+      }
+    }
+    const m = await materialize(edit ? latest! : undefined);
+    const { entries: forgedEntries, index, forged, original } = await forge(m.all, edit);
     const tampered = await buildBundle({ entries: forgedEntries, checkpoint: m.anchor.checkpoint, witness: m.anchor.witness, policy: m.policy, bundleId: `urn:kya-os:example:agentic-commerce:bundle:${ledger.ledgerEpochId}:${m.anchor.checkpoint.core.treeSize}:edited` });
     const [honestReport, tamperedReport] = await Promise.all([verify(m.honest, m.policy, m.keys), verify(tampered, m.policy, m.keys)]);
     const leaves = m.all.map((e) => e.entryDigest);
@@ -433,8 +483,8 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     const next = m.all[index + 1];
     const byKid = new Map(m.keys.keys.map((k) => [k.kid, k.jwk]));
     const verifier = new CompactJwsAuditSignatureVerifier({ resolve: async (s) => (byKid.get(s.kid) as never) ?? null });
-    return {
-      target: { seq: original.core.sequence, eventType: original.core.event.eventType, before: original.core.event.outcome, after: 'succeeded', reason: original.core.event.reason?.code ?? null },
+    const report: TamperReport = {
+      target: { seq: original.core.sequence, eventType: original.core.event.eventType, before: original.core.event.outcome, after: forged.core.event.outcome, reason: original.core.event.reason?.code ?? null },
       attacker: 'insider with the recorder signing key and write access to the journal',
       anchoredRoot: root,
       tamperedRoot,
@@ -446,12 +496,16 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
       witnessStillBindsAnchoredRoot: m.anchor.witness ? m.anchor.witness.core.checkpointDigest === m.anchor.checkpoint.checkpointDigest : false,
       reports: { honest: honestReport, tampered: tamperedReport },
     };
+    if (latest?.checkpoint.checkpointDigest !== m.anchor.checkpoint.checkpointDigest) {
+      throw new Error('The checkpoint changed while verifying the edit. Show audit again before editing.');
+    }
+    lastDemonstration = { material: m, tampered, report };
+    return structuredClone(report);
   }
 
   async function exportBundle(): Promise<ExportResult> {
-    const m = await materialize();
-    const { entries: forgedEntries } = await forge(m.all);
-    const tampered = await buildBundle({ entries: forgedEntries, checkpoint: m.anchor.checkpoint, witness: m.anchor.witness, policy: m.policy, bundleId: `${m.honest.manifest.core.bundleId}:edited` });
+    if (!lastDemonstration) await tamper();
+    const { material: m, tampered, report } = lastDemonstration!;
     fs.mkdirSync(auditDir, { recursive: true });
     const files = {
       bundle: path.join(auditDir, 'bundle.json'),
@@ -464,7 +518,6 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
     fs.writeFileSync(files.policy, JSON.stringify(m.policy, null, 2));
     fs.writeFileSync(files.keys, JSON.stringify(m.keys, null, 2));
     const rel = (p: string) => path.relative(process.cwd(), p) || p;
-    const [honestReport, tamperedReport] = await Promise.all([verify(m.honest, m.policy, m.keys), verify(tampered, m.policy, m.keys)]);
     // The package's `kya-audit` bin only runs when argv[1] ends in /audit/cli.js,
     // which the npm bin shim does not satisfy (fix pending upstream); call the
     // file directly. `npm run verify:ledger` wraps the same line.
@@ -476,15 +529,17 @@ export async function createPartyAudit(identity: KeyedIdentity, options: PartyAu
         honest: `${cli} ${rel(files.bundle)} --policy ${rel(files.policy)} --keys ${rel(files.keys)}`,
         tampered: `${cli} ${rel(files.tampered)} --policy ${rel(files.policy)} --keys ${rel(files.keys)}`,
       },
-      reports: { honest: honestReport, tampered: tamperedReport },
+      reports: structuredClone(report.reports),
       bundleId: m.honest.manifest.core.bundleId,
       manifestDigest: m.honest.manifest.manifestDigest,
+      checkpointDigest: m.anchor.checkpoint.checkpointDigest,
+      target: { ...report.target },
       components: m.honest.manifest.core.inventory.map((i) => ({ path: i.path, mediaType: i.mediaType, size: i.size ?? '0', digest: i.digest ?? '' })),
     };
   }
 
   async function bundle(): Promise<AuditReplayBundleV1> {
-    return (await materialize()).honest;
+    return structuredClone((lastDemonstration?.material ?? await materialize()).honest);
   }
 
   return { middlewareAudit, record: (input, recordOptions) => trail.record(input, recordOptions), capabilities, ledger, recorder: recorderRef, entries, anchor, report, tamper, exportBundle, bundle };
@@ -512,7 +567,7 @@ function row(e: SignedAuditEntryV1, anchored: boolean): LedgerRow {
   };
 }
 
-/** Share SDK-computed roots within a single immutable report snapshot. */
+/** Share SDK-computed roots within a single immutable report or bundle snapshot. */
 class SnapshotMerkleTree extends Rfc9162MerkleTree {
   private readonly roots = new Map<string, Promise<Digest>>();
 

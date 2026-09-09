@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "From agent-visible to agent-actionable: a shopping agent discovers a merchant's accepted trust schemes, presents a delegation scoped to a GS1 Digital Link product class, and is revoked mid-session by its Responsible Party \u2014 on the published @kya-os/mcp, did:web + a self-hosted StatusList2021.",
+  "description": "From agent-visible to agent-actionable: a shopping agent discovers a merchant's accepted trust schemes, presents a delegation scoped to a GS1 Digital Link product class, and is revoked mid-session by its Responsible Party — on the published @kya-os/mcp, did:web + a self-hosted StatusList2021.",
   "license": "MIT",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
@@ -36,12 +36,19 @@
     "@kya-os/mcp": "^1.15.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@simplewebauthn/server": "^13.3.2",
+    "@x402/core": "2.25.0",
+    "@x402/evm": "2.25.0",
     "dotenv": "^17.4.2",
     "google-auth-library": "10.9.1",
-    "hono": "^4.13.3"
+    "hono": "^4.13.3",
+    "proper-lockfile": "4.1.2",
+    "viem": "2.56.3"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "@types/proper-lockfile": "4.1.4",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "parse5": "8.0.1",
     "tsx": "^4.23.11",
     "typescript": "^5.9.3",

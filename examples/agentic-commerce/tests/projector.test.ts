@@ -14,13 +14,19 @@ vi.mock('../src/rp/key/credential-store.js', () => ({
 // Exercise the actual projector script through its public SSE and HTTP inputs.
 // This tiny DOM only implements the primitives this framework-free page uses.
 class Element {
-  textContent = '';
+  private text = '';
+  get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
+  set textContent(value: string) { this.text = value; this.children = []; }
   innerHTML = '';
   className = '';
   hidden = false;
   disabled = false;
   href = '';
   title = '';
+  value = '';
+  onchange: (() => unknown) | null = null;
+  onsubmit: ((event: { preventDefault(): void }) => unknown) | null = null;
+  focus() {}
   attributes = new Map<string, string>();
   style: Record<string, string> = {};
   children: Element[] = [];
@@ -35,7 +41,7 @@ class Element {
     },
   };
   appendChild(child: Element) { this.children.push(child); }
-  replaceChildren(...children: Element[]) { this.children = children; }
+  replaceChildren(...children: Element[]) { this.text = ''; this.children = children; }
   prepend(child: Element) { this.children.unshift(child); }
   querySelector() { const child = new Element(); this.children.push(child); return child; }
   scrollIntoView() {}
@@ -89,8 +95,10 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
   html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1]!, new Element()]));
   const streams = new Map<string, { onmessage?: (event: { data: string }) => void; onopen?: () => void }>();
-  const state = { credential, responses: {} as Record<string, unknown>, requests: [] as string[] };
+  const state = { credential, responses: {} as Record<string, unknown>, requests: [] as string[], posts: [] as Array<{ url: string; body: unknown }> };
+  const listeners = new Map<string, (event: unknown) => void>();
   const get = (id: string) => {
+    if (!elements.has(id) && /^(ledger-row-|tree-forged)/.test(id)) elements.set(id, new Element());
     const element = elements.get(id);
     if (!element) throw new Error(`Missing projector element #${id}`);
     return element;
@@ -99,13 +107,14 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
   const open = vi.fn().mockReturnValue(popup);
   const context = vm.createContext({
     URL, Date, console, setTimeout, clearTimeout, AbortSignal, AbortController,
-    window: { open, screen: { availWidth: 1440, availHeight: 900, availLeft: 0, availTop: 0 } },
+    window: { open, location: { origin: 'http://localhost:4949' }, screen: { availWidth: 1440, availHeight: 900, availLeft: 0, availTop: 0 } },
     document: {
       getElementById: get, createElement: () => new Element(),
-      body: new Element(), querySelectorAll: () => [], addEventListener: () => {},
+      body: new Element(), querySelectorAll: () => [], addEventListener: (type: string, callback: (event: unknown) => void) => listeners.set(type, callback),
     },
-    fetch: async (url: string) => {
+    fetch: async (url: string, options?: { body?: string }) => {
       state.requests.push(url);
+      if (options?.body) state.posts.push({ url, body: JSON.parse(options.body) });
       if (state.responses[url] instanceof Error) throw state.responses[url];
       return { json: async () => Object.hasOwn(state.responses, url)
       ? typeof state.responses[url] === 'function' ? (state.responses[url] as () => unknown)() : state.responses[url] : url.endsWith('/api/state')
@@ -124,7 +133,7 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
     if (!source?.onmessage) throw new Error(`Missing SSE stream ${stream}`);
     source.onmessage({ data: JSON.stringify(data) });
   };
-  return { get, emit, state, open, popup, reconnect: (url: string) => streams.get(url)?.onopen?.() };
+  return { get, emit, state, open, popup, key: (key: string, target?: unknown) => listeners.get('keydown')?.({ key, target }), reconnect: (url: string) => streams.get(url)?.onopen?.() };
 }
 
 const attributePayload = `\" onpointerenter=\"globalThis.projectorInjected=1\" data-injected=\"'&<>`;
@@ -142,6 +151,32 @@ function auditFixture() {
     inclusions: [], allIncluded: true, chainIntact: true,
   };
 }
+
+describe('payment and checkout decisions', () => {
+  it('distinguishes payment authorization from delegation failure and settlement uncertainty from refusal', async () => {
+    const p = await projector();
+    p.emit('/api/events', { type: 'verdict', verdict: 'denied', code: 'PAYMENT_REQUIRED', body: { error: 'PAYMENT_REQUIRED', x402Version: 2 } });
+    expect(p.get('seal').textContent).toBe('PAYMENT NEEDED');
+    expect(p.get('decision-summary').textContent).toContain('Authority verified');
+    p.emit('/api/events', { type: 'verdict', verdict: 'denied', code: 'SETTLEMENT_PENDING', body: { error: 'SETTLEMENT_PENDING' } });
+    expect(p.get('seal').textContent).toBe('CHECK OUTCOME');
+    expect(p.get('decision-summary').textContent).toContain('Do not submit another payment');
+    expect(p.get('decision-summary').textContent).not.toContain('No order placed');
+  });
+  it('opens only same-merchant checkout review links and keeps their consent separate from RP grant polling', async () => {
+    const p = await projector();
+    const url = 'http://localhost:4949/checkout/demo?token=opaque';
+    p.emit('/api/events', { type: 'checkout.review', id: 'demo', url, expiresAt: new Date(Date.now() + 300_000).toISOString() });
+    expect(p.get('seal').textContent).toBe('REVIEW CHECKOUT');
+    expect(p.get('authorization-link').textContent).toBe('Review checkout');
+    await p.get('authorization-link').onclick!({ button: 0, preventDefault() {} });
+    expect(p.popup.location.replace).toHaveBeenCalledWith(url);
+    expect(p.popup.opener).toBeNull();
+    p.emit('/api/events', { type: 'checkout.review', id: 'demo', url: 'https://attacker.example/checkout/demo?token=opaque' });
+    expect(p.get('authorization-link').href).toBe('');
+    expect(p.get('seal').textContent).toBe('DENIED');
+  });
+});
 
 describe('revocation terminal feedback', () => {
   it('renders the HTTP result even when the completion SSE is lost', async () => {
@@ -623,6 +658,7 @@ async function registrationPage(signedIn: boolean, displayName = 'Dylan Hobbs', 
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1]!, new Element()]));
   const requests: Array<{ url: string; credentials?: string }> = [];
   const get = (id: string) => {
+    if (!elements.has(id) && /^(ledger-row-|tree-forged)/.test(id)) elements.set(id, new Element());
     const element = elements.get(id);
     if (!element) throw new Error(`Missing registration element #${id}`);
     return element;
@@ -902,5 +938,168 @@ describe('audit loading feedback', () => {
     finish(auditFixture());
     await loading;
     expect(p.get('audit-status').hidden).toBe(true);
+  });
+});
+
+function editableAuditFixture() {
+  const base = auditFixture();
+  return { ...base, checkpoint: { ...base.checkpoint, treeSize: 3, checkpointDigest: 'sha256:checkpoint' },
+    entries: [
+      { ...base.entries[0]!, seq: '0', eventType: 'tool.call.started', outcome: 'unknown' },
+      { ...base.entries[0]!, seq: '1', eventType: 'tool.call.denied', outcome: 'denied' },
+      { ...base.entries[0]!, seq: '2', eventType: 'tool.call.completed', outcome: 'succeeded' },
+      { ...base.entries[0]!, seq: '3', eventType: 'tool.call.failed', outcome: 'failed', anchored: false },
+    ] };
+}
+function editedAuditFixture() {
+  return { target: { seq: '2', eventType: 'tool.call.completed', before: 'succeeded', after: 'failed' },
+    chainBreaksAt: null, anchoredRoot: 'sha256:honest', tamperedRoot: 'sha256:edited',
+    forgedReceiptVerifies: true, witnessStillBindsAnchoredRoot: true,
+    reports: { honest: { chainIntegrity: { verdict: 'valid', reasonCodes: [] as string[] } },
+      tampered: { chainIntegrity: { verdict: 'valid', reasonCodes: [] }, checkpointIntegrity: { verdict: 'invalid', reasonCodes: ['AUDIT_CHECKPOINT_RANGE_MISMATCH', 'AUDIT_MERKLE_PROOF_INVALID'] } } } };
+}
+
+describe('interactive audit editing', () => {
+  it('opens the cached editor immediately, without forging or refreshing the checkpoint', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!();
+    const before = p.state.requests.length;
+    await p.get('btn-tamper').onclick!();
+    expect(p.get('audit-editor').hidden).toBe(false);
+    expect(p.get('audit-edit-entry').value).toBe('1');
+    expect(p.get('audit-edit-entry').innerHTML).not.toContain('value="3"');
+    expect(p.get('audit-edit-before').textContent).toBe('denied');
+    expect(p.get('audit-edit-done').disabled).toBe(true);
+    expect(p.state.requests.length).toBe(before);
+    p.get('audit-edit-cancel').onclick!();
+    expect(p.get('audit-editor').hidden).toBe(true);
+    expect(p.state.requests.length).toBe(before);
+  });
+
+  it('shows loading immediately when T first needs a checkpoint and respects a dismissed overlay', async () => {
+    const p = await projector();
+    let finish!: (r: ReturnType<typeof editableAuditFixture>) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const loading = p.get('btn-tamper').onclick!();
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(true);
+    expect(p.get('audit-status').hidden).toBe(false);
+    p.get('audit-close').onclick!();
+    finish(editableAuditFixture());
+    await loading;
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(false);
+    expect(p.state.requests).not.toContain('/api/act/tamper');
+  });
+
+  it('submits the selected change against the shown checkpoint and paints pending feedback before completion', async () => {
+    const p = await projector();
+    p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!();
+    await p.get('audit-edit').onclick!();
+    p.get('audit-edit-entry').value = '2'; p.get('audit-edit-entry').onchange!();
+    p.get('audit-edit-outcome').value = 'failed'; p.get('audit-edit-outcome').onchange!();
+    expect(p.get('audit-edit-done').disabled).toBe(false);
+    let finish!: (r: ReturnType<typeof editedAuditFixture>) => void;
+    p.state.responses['/api/act/tamper'] = new Promise(resolve => { finish = resolve; });
+    const done = p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    expect(p.get('audit-edit-feedback').textContent).toContain('Verifying');
+    expect(p.get('audit-edit-done').disabled).toBe(true);
+    await p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    expect(p.state.posts.filter(p => p.url === '/api/act/tamper')).toEqual([{ url: '/api/act/tamper', body: { sequence: '2', outcome: 'failed', checkpointDigest: 'sha256:checkpoint' } }]);
+    finish(editedAuditFixture()); await done;
+    expect(p.get('audit-editor').hidden).toBe(true);
+    expect(p.get('audit-tamper-note').textContent).toContain('succeeded → failed');
+    expect(p.get('audit-chain-note').textContent).not.toContain('broken');
+    expect(p.get('audit-tamper').innerHTML).not.toContain('PREDECESSOR_MISMATCH');
+    expect(p.get('audit-verdicts').innerHTML).toContain('CHECKPOINT_RANGE_MISMATCH');
+    expect(p.get('audit-tamper').innerHTML).toContain('CHECKPOINT_RANGE_MISMATCH');
+    expect(p.get('audit-tamper').innerHTML).not.toContain('CHECKPOINT_ROOT_MISMATCH');
+  });
+
+  it('rejects no-op submissions and keeps server errors visible beside the selected value', async () => {
+    const p = await projector(); p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!(); await p.get('btn-tamper').onclick!();
+    await p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    expect(p.state.requests).not.toContain('/api/act/tamper');
+    p.get('audit-edit-outcome').value = 'succeeded'; p.get('audit-edit-outcome').onchange!();
+    p.state.responses['/api/act/tamper'] = { error: '<checkpoint changed>' };
+    await p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    expect(p.get('audit-editor').hidden).toBe(false);
+    expect(p.get('audit-edit-feedback').textContent).toContain('<checkpoint changed>');
+    expect(p.get('audit-edit-feedback').innerHTML).not.toContain('<checkpoint changed>');
+    expect(p.get('audit-edit-outcome').value).toBe('succeeded');
+    expect(p.get('audit-edit-done').disabled).toBe(false);
+  });
+
+  it('ignores global shortcuts while an input or select has focus', async () => {
+    const p = await projector();
+    const before = p.state.requests.length;
+    for (const key of ['T', 'E', 'A', 'R', '1', 'K']) p.key(key, { closest: () => ({}) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.state.requests.length).toBe(before);
+  });
+
+  it('never offers unanchored or empty ledger edits', async () => {
+    const p = await projector();
+    const report = editableAuditFixture(); report.entries = [];
+    p.state.responses['/api/act/audit'] = report;
+    await p.get('btn-audit').onclick!(); await p.get('btn-tamper').onclick!();
+    expect(p.get('audit-editor').hidden).toBe(true);
+    expect(p.get('audit-status').textContent).toContain('No checkpointed entries');
+    expect(p.state.requests).not.toContain('/api/act/tamper');
+  });
+});
+
+
+describe('audit edit lifecycle and truthful event summaries', () => {
+  it('shows verifier failures in the original bundle instead of assuming it passed', async () => {
+    const p = await projector(); p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!(); await p.get('audit-edit').onclick!();
+    p.get('audit-edit-entry').value = '2'; p.get('audit-edit-entry').onchange!();
+    p.get('audit-edit-outcome').value = 'failed'; p.get('audit-edit-outcome').onchange!();
+    const edited = editedAuditFixture();
+    edited.reports.honest.chainIntegrity = { verdict: 'invalid', reasonCodes: ['AUDIT_PREDECESSOR_MISMATCH'] };
+    p.state.responses['/api/act/tamper'] = edited;
+    await p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    expect(p.get('audit-verdicts').innerHTML).toContain('honest bundle, same verifier · policy · keys: 0 valid · 0 indeterminate · 1 invalid');
+    expect(p.get('audit-verdicts').innerHTML).not.toContain('· 0 invalid');
+    p.state.responses['/api/act/export'] = { reports: edited.reports, components: [], manifestDigest: 'sha256:manifest', command: { honest: 'verify original' } };
+    await p.get('btn-export').onclick!();
+    expect(p.get('audit-export').innerHTML).not.toContain('expected exit 0');
+    expect(p.get('audit-export').innerHTML.match(/expected exit 1/g)).toHaveLength(2);
+  });
+
+  it('queues T during checkpoint refresh instead of silently dropping it', async () => {
+    const p = await projector(); p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!();
+    let finish!: (r: ReturnType<typeof editableAuditFixture>) => void;
+    p.state.responses['/api/act/audit'] = new Promise(resolve => { finish = resolve; });
+    const refreshing = p.get('btn-audit').onclick!();
+    p.key('T');
+    expect(p.get('audit-status').textContent).toContain('editor');
+    finish(editableAuditFixture()); await refreshing;
+    expect(p.get('audit-editor').hidden).toBe(false);
+    expect(p.state.requests).not.toContain('/api/act/tamper');
+  });
+
+  it('does not reopen an overlay closed while an edit verifies', async () => {
+    const p = await projector(); p.state.responses['/api/act/audit'] = editableAuditFixture();
+    await p.get('btn-audit').onclick!(); await p.get('btn-tamper').onclick!();
+    p.get('audit-edit-entry').value = '2'; p.get('audit-edit-entry').onchange!();
+    p.get('audit-edit-outcome').value = 'failed'; p.get('audit-edit-outcome').onchange!();
+    let finish!: (r: ReturnType<typeof editedAuditFixture>) => void;
+    p.state.responses['/api/act/tamper'] = new Promise(resolve => { finish = resolve; });
+    const submitting = p.get('audit-editor').onsubmit!({ preventDefault() {} });
+    p.get('audit-close').onclick!(); finish(editedAuditFixture()); await submitting;
+    expect(p.get('audit-overlay').classList.contains('on')).toBe(false);
+    expect(p.get('audit-editor').hidden).toBe(true);
+  });
+
+  it('does not invent a following chain link in a final-row tamper event', async () => {
+    const p = await projector(); const edited = editedAuditFixture();
+    p.emit('/api/events', { type: 'tamper', ...edited, forgedInclusion: false, rootsMatch: false, verdicts: edited.reports.tampered });
+    const message = p.get('log').children[0]!.children[0]!.innerHTML;
+    expect(message).toContain('no following chain link');
+    expect(message).not.toContain('chain break at #');
   });
 });
