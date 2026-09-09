@@ -291,6 +291,8 @@ The displayed name is provider-supplied account data, not a verified legal ident
 Create a Google OAuth client of type **Web application**.
 Add both `http://localhost` and `http://localhost:4950` as **Authorized JavaScript origins**.
 For hosted use, also add the exact HTTPS `RP_ORIGIN`.
+The HTTPS proxy must preserve the public authorization hostname and port when forwarding HTTP to the RP.
+Google sign-in keeps secure cookies and checks browser POST origins against the configured public HTTPS origin.
 This integration uses the Google Identity Services JavaScript callback, so no client secret or redirect URI is needed.
 See [Google's setup guide](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
 

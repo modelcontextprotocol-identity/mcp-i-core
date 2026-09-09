@@ -86,6 +86,7 @@ export class GoogleIdentity implements HumanIdentityAuth {
   readonly enabled: boolean;
   readonly routes = new Hono();
   private readonly origin: string;
+  private readonly host: string;
   private readonly secure: boolean;
   private readonly now: () => number;
   private readonly clientId: string;
@@ -101,6 +102,7 @@ export class GoogleIdentity implements HumanIdentityAuth {
       throw new Error('Google sign-in requires an HTTPS origin or an exact HTTP loopback origin.');
     }
     this.origin = origin.origin;
+    this.host = origin.host;
     this.secure = origin.protocol === 'https:';
     this.now = config.now ?? Date.now;
     this.clientId = config.clientId?.trim() ?? '';
@@ -111,7 +113,7 @@ export class GoogleIdentity implements HumanIdentityAuth {
   }
 
   account(context: Context): HumanAccount | null {
-    if (!this.enabled || new URL(context.req.url).origin !== this.origin) return null;
+    if (!this.enabled || !this.isExpectedRequest(context)) return null;
     const token = getCookie(context, SESSION_COOKIE);
     if (!token) return null;
     const session = this.sessions.get(token);
@@ -120,6 +122,14 @@ export class GoogleIdentity implements HumanIdentityAuth {
       return null;
     }
     return { ...session.account };
+  }
+
+  private isExpectedRequest(context: Context): boolean {
+    const url = new URL(context.req.url);
+    // A TLS proxy can forward HTTP while preserving the public host. Keep the
+    // configured hostname and port binding; never trust forwarded headers.
+    return url.host === this.host && (url.origin === this.origin
+      || (this.secure && url.protocol === 'http:'));
   }
 
   private cookieOptions(maxAge: number) {
@@ -142,7 +152,7 @@ export class GoogleIdentity implements HumanIdentityAuth {
       c.header('Referrer-Policy', 'no-referrer');
       c.header('X-Content-Type-Options', 'nosniff');
       c.header('X-Frame-Options', 'DENY');
-      if (new URL(c.req.url).origin !== this.origin) return c.json({ error: 'wrong_origin' }, 403);
+      if (!this.isExpectedRequest(c)) return c.json({ error: 'wrong_origin' }, 403);
       if (c.req.method === 'POST' && c.req.header('Origin') !== this.origin) return c.json({ error: 'wrong_origin' }, 403);
       this.prune();
       await next();
