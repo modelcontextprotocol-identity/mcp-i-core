@@ -96,6 +96,8 @@ export interface MerchantAppConfig {
   identity: KeyedIdentity;
   name: string;
   port: number;
+  /** Listener address; loopback locally, 0.0.0.0 behind a deployment proxy. */
+  bindHost?: string;
   rpDid: string;
   rpDidMirrorUrl: string;
   statusListUrl: string;
@@ -130,6 +132,7 @@ export function merchantConfigFromEnv(overrides: Partial<MerchantAppConfig> = {}
     identity: loadMerchantIdentity(),
     name: env('MERCHANT_NAME', 'Dal Giardino Direct (demo merchant)'),
     port: MERCHANT_PORT,
+    bindHost: env('BIND_HOST', '127.0.0.1'),
     rpDid: RP_DID,
     rpDidMirrorUrl: RP_DID_MIRROR_URL,
     statusListUrl: STATUS_LIST_URL,
@@ -688,14 +691,27 @@ export async function createMerchant(config: MerchantAppConfig) {
 
   app.post('/api/act/reset', async (c) => {
     // Start a fresh consent ceremony. Reset never issues authority.
-    const res = await fetch(`${config.rpOrigin}/api/rp/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    const issued = (await res.json()) as Record<string, unknown>;
-    if (res.ok) clearAgentState();
+    let res: Response;
+    let issued: Record<string, unknown>;
+    try {
+      res = await fetch(`${config.rpOrigin}/api/rp/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        redirect: 'error', signal: AbortSignal.timeout(8000) });
+      const body: unknown = await res.json().catch(() => null);
+      issued = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+    } catch {
+      return c.json({ error: 'RP_RESET_UNAVAILABLE', message: 'The authorization host could not confirm reset. The local grant remains unchanged.' }, 502);
+    }
+    if (!res.ok || issued['success'] !== true) return c.json({
+      error: typeof issued['error'] === 'string' ? issued['error'] : 'RP_RESET_REFUSED',
+      message: typeof issued['message'] === 'string' ? issued['message'] : `The authorization host did not confirm reset (HTTP ${res.status}). The local grant remains unchanged.`,
+      upstreamStatus: res.status,
+    }, 502);
+    clearAgentState();
     statusListResolver.invalidateCache();
     lastMandate = null;
     authorizationChallenge = null;
     broadcast({ type: 'reset', index: issued['index'] ?? null });
-    return c.json(issued, res.ok ? 200 : 502);
+    return c.json(issued);
   });
 
   app.get('/api/receipt/last', (c) => (lastReceipt ? c.json(lastReceipt) : c.json({ error: 'no receipt yet — place an order first' }, 404)));
@@ -762,7 +778,7 @@ function verdictsOf(report: object): Record<string, { verdict: string; reasonCod
 export async function startMerchantServer(overrides: Partial<MerchantAppConfig> = {}) {
   const config = merchantConfigFromEnv(overrides);
   const merchant = await createMerchant(config);
-  await new Promise<void>((resolve) => merchant.httpServer.listen(config.port, '127.0.0.1', () => {
+  await new Promise<void>((resolve) => merchant.httpServer.listen(config.port, config.bindHost ?? '127.0.0.1', () => {
     console.log(`Merchant edge: http://localhost:${config.port}`);
     console.log(`  console:    http://localhost:${config.port}/`);
     console.log(`  connect:    http://localhost:${config.port}/connect`);

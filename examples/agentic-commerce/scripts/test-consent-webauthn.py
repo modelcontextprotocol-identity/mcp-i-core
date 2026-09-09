@@ -39,6 +39,19 @@ DECISION_HEIGHTS = {}
 
 
 async def assert_console_layout(page, output=None, screenshot_name=None):
+    """Exercise native and wider system-font metrics at every viewport/state."""
+    for font in [None, 'Verdana, sans-serif']:
+        if font:
+            await page.locator('body').evaluate("(node, font) => node.style.setProperty('--sans', font)", font)
+        try:
+            name = f'{screenshot_name}-wide-font' if font and screenshot_name else screenshot_name
+            await _assert_console_layout(page, output, name)
+        finally:
+            if font:
+                await page.locator('body').evaluate("node => node.style.removeProperty('--sans')")
+
+
+async def _assert_console_layout(page, output=None, screenshot_name=None):
     """Measure the actual rendered monitor, including every final decision state."""
     assert await page.locator('.controls button').evaluate_all('nodes => nodes.map(node => node.id)') == [
         'btn-discover', 'btn-order', 'btn-wrong', 'btn-overcap', 'btn-retry', 'btn-steal',
@@ -130,21 +143,17 @@ async def assert_console_layout(page, output=None, screenshot_name=None):
                   const viewport = element.closest('.panel-body').getBoundingClientRect();
                   return box.left >= viewport.left && box.right <= viewport.right && box.top >= viewport.top && box.bottom <= viewport.bottom;
                 }""")
+                if not visible_in_panel and (output or args.outdir):
+                    failure_output = output or Path(args.outdir)
+                    await page.screenshot(path=str(failure_output / f'console-delegation-clipped-{width}x{height}.png'), full_page=True)
+                    metrics = await page.locator('.grant-panel').evaluate("""panel => Object.fromEntries(['.panel-head', '.panel-body', '.human-grant', '.credential-frame', '.audit-controls'].map(selector => {
+                      const node = panel.querySelector(selector), box = node.getBoundingClientRect();
+                      return [selector, {top: box.top, bottom: box.bottom, height: box.height, scrollHeight: node.scrollHeight, font: getComputedStyle(node).fontFamily}];
+                    }))""")
+                    (failure_output / f'console-delegation-clipped-{width}x{height}.json').write_text(json.dumps(metrics, indent=2))
                 assert visible_in_panel, f'Core delegation field {selector} requires scrolling at {width}x{height}'
         log_box = await page.locator('#log').bounding_box()
         assert log_box['height'] >= 180, f'Log too small at {width}x{height}: {log_box}'
-        if width == 640:
-            # Reproduce Linux font metrics across the header and controls on
-            # macOS too. A wrapped header must not squeeze the activity viewport.
-            await page.locator('body').evaluate("node => node.style.setProperty('--sans', 'Verdana, sans-serif')")
-            try:
-                wrapped_log = await page.locator('#log').bounding_box()
-                if output and screenshot_name:
-                    await page.screenshot(path=str(output / f'{screenshot_name}-640x900-wide-font.png'), full_page=True)
-                assert wrapped_log['height'] >= 180, f'Wrapped header and controls squeeze the live log: {wrapped_log}'
-                assert await page.evaluate('document.documentElement.scrollHeight <= innerHeight'), 'Wrapped header and controls force page scrolling'
-            finally:
-                await page.locator('body').evaluate("node => node.style.removeProperty('--sans')")
         sizes = await page.evaluate("""() => ({
           action: parseFloat(getComputedStyle(document.querySelector('#btn-order')).fontSize),
           log: parseFloat(getComputedStyle(document.querySelector('#log')).fontSize),
@@ -722,7 +731,8 @@ async def browser_check(merchant, rp, output, state):
         try:
             await expect(console_page.locator('#verdict-code')).to_have_text('HUMAN_APPROVED')
             await expect(console_page.locator('#grant-pill')).to_have_text('active', timeout=2000)
-            await expect(console_page.locator('#c-cap')).to_have_text('CHF 50.00 per order')
+            await expect(console_page.locator('#c-cap-label')).to_have_text('Per-order limit')
+            await expect(console_page.locator('#c-cap')).to_have_text('CHF 50.00')
             await expect(console_page.locator('#c-scope')).to_contain_text('09506000134352')
             if args.google_identity:
                 await expect(console_page.locator('#c-human')).to_have_text('Workshop Test Human')

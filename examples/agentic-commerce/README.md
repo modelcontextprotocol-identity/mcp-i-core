@@ -180,8 +180,13 @@ See [Claude Code's HTTP configuration documentation](https://code.claude.com/doc
 Claude Desktop and Claude web **Custom connectors** use a reachable HTTPS server URL.
 Their connector requests originate from Anthropic's cloud even when the Desktop app is running on this laptop, so these localhost URLs cannot be used there directly.
 See [Anthropic's connector networking guidance](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities) and [custom connector setup](https://claude.com/docs/connectors/custom/remote-mcp).
-This example has not been deployed publicly.
 A hosted rehearsal needs an authenticated gateway and correctly configured public consent origins; the presenter console's local reset and revocation controls must remain private.
+Both services default to `BIND_HOST=127.0.0.1`; set `BIND_HOST=0.0.0.0` inside a hosted container.
+Set `RP_ORIGIN` to the exact public HTTPS authorization origin and `MERCHANT_ORIGIN` to the public merchant origin.
+Consent URLs, Google sign-in, form-origin checks and consent passkey assertions use the configured authorization origin even when a TLS proxy forwards HTTP internally.
+Keep `STATUS_LIST_URL`, `RP_DID`, `RP_KID`, `WEBAUTHN_RP_ID` and the registration/revocation page's `WEBAUTHN_ORIGIN` aligned with the deployed hosts.
+Changing the bind address does not configure gateway authentication: `/agent/mcp` retains its loopback Host/Origin restrictions, and any hosting wrapper must authenticate that raw HTTP route before forwarding it.
+Presenter admin tokens belong to that hosting wrapper, not the delegation protocol; unlocking controls cannot restore a revoked grant.
 The existing `docs/claude_desktop_config.json` is a legacy stdio configuration and is not used for this HTTP flow.
 
 The gateway is the agent's trusted signing runtime.
@@ -279,6 +284,7 @@ The displayed name is provider-supplied account data, not a verified legal ident
 
 Create a Google OAuth client of type **Web application**.
 Add both `http://localhost` and `http://localhost:4950` as **Authorized JavaScript origins**.
+For hosted use, also add the exact HTTPS `RP_ORIGIN`.
 This integration uses the Google Identity Services JavaScript callback, so no client secret or redirect URI is needed.
 See [Google's setup guide](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
 
@@ -405,6 +411,8 @@ A denied, expired, modified or reused consent decision cannot issue a new grant.
 For local or offline rehearsal the default RP DID resolves to this laptop.
 `ALLOW_INSECURE_LOCALHOST=1` permits the existing loopback-only HTTPS-to-HTTP rewrite; unrelated hosts are not downgraded.
 `OFFLINE=1` resolves the RP DID document through the hub mirror while still verifying signatures.
+If the configured RP signing key changes, the hub republishes its current verification key and re-signs the retained status list without clearing revocation bits.
+Previously issued grants still carry the previous key's signature; issue a fresh grant after an intentional key rotation.
 `AUDIT_WITNESS=0` disables witnessing for diagnostic runs; leave it enabled for the workshop.
 
 

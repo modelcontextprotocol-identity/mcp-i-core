@@ -13,12 +13,14 @@ import path from 'node:path';
 import fs from 'node:fs';
 import {
   BitstringManager,
+  base64urlDecodeToBytes,
   canonicalizeJSON,
   type StatusList2021Credential,
   type VCSigningFunction,
 } from '@kya-os/mcp';
 import {
   VAR_DIR,
+  cryptoProvider,
   gzipCompressor,
   gzipDecompressor,
   readJson,
@@ -132,10 +134,40 @@ export async function ensureStatusList(options: {
   signingFunction: VCSigningFunction;
   url: string;
 }): Promise<StatusList2021Credential> {
-  const existing = loadStatusList();
-  const existingIssuer = existing ? (typeof existing.issuer === 'string' ? existing.issuer : existing.issuer.id) : null;
-  if (existing && existing.id === options.url && existingIssuer === options.identity.did) return existing;
-  const fresh = await buildInitialStatusList(options);
-  saveStatusListVersion(fresh);
-  return fresh;
+  for (;;) {
+    const existing = loadStatusList();
+    const snapshot = JSON.stringify(existing);
+    const existingIssuer = existing ? (typeof existing.issuer === 'string' ? existing.issuer : existing.issuer.id) : null;
+    let currentSignature = false;
+    if (existing && existing.id === options.url && existingIssuer === options.identity.did) {
+      const { proof, ...unsigned } = existing;
+      const value = proof as Record<string, unknown> | undefined;
+      if (value?.['verificationMethod'] === options.identity.kid && typeof value['proofValue'] === 'string') {
+        try {
+          currentSignature = await cryptoProvider.verify(new TextEncoder().encode(canonicalizeJSON(unsigned)),
+            base64urlDecodeToBytes(value['proofValue']), options.identity.publicKeyBase64);
+        } catch { /* A retained list signed by the previous key needs re-signing. */ }
+      }
+    }
+    if (currentSignature) {
+      if (JSON.stringify(loadStatusList()) !== snapshot) continue;
+      return existing!;
+    }
+    let fresh: StatusList2021Credential;
+    if (existing) {
+      // Key or URL changes must never restore previously revoked authority.
+      // Validate the retained bitstring and re-sign it without changing a bit.
+      await BitstringManager.decode(existing.credentialSubject.encodedList, gzipCompressor, gzipDecompressor);
+      const { proof: _oldProof, ...unsigned } = existing;
+      const updated = { ...unsigned, id: options.url, issuer: options.identity.did, issuanceDate: new Date().toISOString(),
+        credentialSubject: { ...unsigned.credentialSubject, id: `${options.url}#list` } };
+      const proof = await options.signingFunction(canonicalizeJSON(updated), options.identity.did, options.identity.kid);
+      fresh = { ...updated, proof: proof as Record<string, unknown> };
+    } else fresh = await buildInitialStatusList(options);
+    // Signing yields. If revocation published meanwhile, retry from that
+    // newer list instead of overwriting its bits with this older snapshot.
+    if (JSON.stringify(loadStatusList()) !== snapshot) continue;
+    saveStatusListVersion(fresh, loadStatusListMeta().lastAction);
+    return fresh;
+  }
 }

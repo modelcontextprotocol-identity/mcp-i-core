@@ -47,7 +47,6 @@ export interface KeyRoutesConfig {
   performRevoke: (index: number) => Promise<RevokeOutcome>;
 }
 
-const OPERATOR_USER = new TextEncoder().encode('responsible-party');
 const CHALLENGE_TTL_MS = 120_000;
 
 export function createKeyRoutes(config: KeyRoutesConfig) {
@@ -115,9 +114,12 @@ export function createKeyRoutes(config: KeyRoutesConfig) {
       (body as Record<string, unknown>)['label'] ?? 'authenticator',
     ).slice(0, 40);
     const account = c.get('account');
+    // Anonymous enrollments are separate users, even on the same authenticator.
+    // Assertions look up the stored key by credential ID; only an authenticated
+    // account has a stable user handle across registrations.
     const userID = account
       ? new TextEncoder().encode(account.id)
-      : OPERATOR_USER;
+      : Uint8Array.from(randomBytes(32));
     if (!userID.length || userID.length > 64)
       return c.json({ error: 'invalid_account_reference' }, 500);
     const accountName =

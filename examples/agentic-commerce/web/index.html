@@ -78,7 +78,7 @@
         <div class="cred">
           <div class="cred-row scope-actions"><span class="k">Action scopes</span><code id="c-action-scopes">—</code></div>
           <div class="cred-row" style="display:block"><span class="k">Product scope · GS1</span><span class="scope-uri" id="c-scope">—</span></div>
-          <div class="cred-row"><span class="k">Order limit</span><span class="v cap" id="c-cap">—</span></div>
+          <div class="cred-row"><span class="k" id="c-cap-label">Per-order limit</span><span class="v cap" id="c-cap">—</span></div>
           <div class="cred-row"><span class="k">Valid until</span><span class="v" id="c-until">—</span></div>
           <div class="cred-row"><span class="k">Grant status</span><span class="v" id="bit">—</span></div>
 
@@ -382,7 +382,17 @@
   }
   async function api(path, opts, base = '', signal = AbortSignal.timeout(30_000)) {
     const res = await fetch(base + path, { cache: 'no-store', method: opts ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: opts ? JSON.stringify(opts) : undefined, signal });
-    return res.json();
+    let data;
+    try { data = await res.json(); }
+    catch (error) {
+      if (res.ok) throw error;
+      throw Object.assign(new Error(`HTTP ${res.status}: server returned a non-JSON response`), { status: res.status });
+    }
+    if (!res.ok) {
+      const detail = typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : 'Request failed';
+      throw Object.assign(new Error(`HTTP ${res.status}: ${detail}`), { status: res.status, body: data });
+    }
+    return data;
   }
 
   function hideAuthorization() {
@@ -469,6 +479,7 @@
   function renderNoGrant() {
     clearHumanGrant();
     for (const id of ['c-rp', 'c-agent', 'c-aud', 'c-action-scopes', 'c-scope', 'c-cap', 'c-until', 'c-index']) $(id).textContent = '—';
+    $('c-cap-label').textContent = 'Per-order limit';
     $('c-matcher').textContent = 'The Responsible Party issues a grant only after human approval.';
     $('bit').textContent = 'no credential issued';
     $('bit').className = 'v';
@@ -536,7 +547,8 @@
     $('c-action-scopes').textContent = actionScopes.length ? actionScopes.join(' · ') : '—';
     $('c-scope').innerHTML = scope ? dl(scope.resource) : '—';
     $('c-matcher').textContent = scope ? `matcher: ${scope.matcher} → covers /10/<lot> and /21/<serial> beneath the class` : '';
-    $('c-cap').textContent = c.maxAmount ? `${c.currency} ${c.maxAmount} per ${c.per || 'order'}` : '—';
+    $('c-cap-label').textContent = `Per-${c.per || 'order'} limit`;
+    $('c-cap').textContent = c.maxAmount ? `${c.currency} ${c.maxAmount}` : '—';
     $('c-until').textContent = vc.expirationDate ? vc.expirationDate.slice(0, 16).replace('T', ' ') + 'Z' : '—';
     $('c-index').textContent = vc.credentialStatus ? '#' + vc.credentialStatus.statusListIndex : '—';
     if (vc.credentialStatus) $('list-url').href = vc.credentialStatus.statusListCredential;
@@ -583,7 +595,12 @@
       // Only the newest refresh may render, even if earlier reads arrive late.
       const [r, g] = await Promise.all([
         api('/api/rp/state', undefined, rpOrigin),
-        api('/api/rp/delegation', undefined, rpOrigin),
+        api('/api/rp/delegation', undefined, rpOrigin).catch(error => {
+          // The RP explicitly represents an empty wallet with this 404.
+          // Authentication, proxy, and other failures must remain visible.
+          if (error.status === 404 && error.body?.error === 'no active delegation') return { credential: null };
+          throw error;
+        }),
       ]);
       if (version !== rpRefreshVersion) return;
       rpCache = r;
@@ -1149,7 +1166,7 @@
     if (busy) return; setBusy(true);
     try {
       const r = await api('/api/act/reset', {});
-      if (r.error) line(esc(r.error), 'warn-line');
+      if (r.error) throw new Error(r.message || r.error);
       $('receipt').innerHTML = '<div class="dim-line">every allowed response is signed by the merchant\'s key — a receipt any party can verify</div>';
     } catch (err) { line(`reset failed: ${esc(err.message)}`, 'kill-line'); }
     setBusy(false);

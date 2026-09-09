@@ -5,7 +5,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { canonicalizeJSON, type DelegationCredential } from '@kya-os/mcp';
 import { writeJsonAtomic } from '../lib/atomic-json.js';
 import { parseDigitalLink } from '../lib/product.js';
-import { VAR_DIR, RP_PORT } from '../lib/wiring.js';
+import { VAR_DIR, rpOrigin } from '../lib/wiring.js';
+import { isLoopbackHttp, publicOrigin } from '../lib/public-origin.js';
 
 import type { ConsentBindings, ConsentChallenge } from '../lib/consent-contract.js';
 export type { ConsentBindings, ConsentChallenge } from '../lib/consent-contract.js';
@@ -56,9 +57,13 @@ export type ApprovedConsentFlow = ConsentFlow & { approvedScopes: ApprovedScopes
 export class ConsentFlowStore {
   readonly dir: string;
   private readonly now: () => number;
-  constructor(options: { dir?: string; now?: () => number } = {}) {
+  private readonly authorizationOrigin: string;
+  private readonly configuredOrigin: boolean;
+  constructor(options: { dir?: string; now?: () => number; authorizationOrigin?: string } = {}) {
     this.dir = options.dir ?? path.join(VAR_DIR, 'rp', 'consent');
     this.now = options.now ?? Date.now;
+    this.authorizationOrigin = publicOrigin(options.authorizationOrigin ?? rpOrigin());
+    this.configuredOrigin = options.authorizationOrigin !== undefined;
   }
   private read(): StoreData {
     const file = path.join(this.dir, 'flows.json');
@@ -216,18 +221,20 @@ export class ConsentFlowStore {
           'consent_invalid',
           'Invalid challenge token or expiry.',
         );
-      const url = new URL(
-        '/consent',
-        input.authorizationOrigin ?? `http://127.0.0.1:${RP_PORT}`,
-      );
-      if (
-        !['localhost', '127.0.0.1'].includes(url.hostname) ||
-        url.protocol !== 'http:'
-      )
+      let origin: string;
+      try { origin = publicOrigin(input.authorizationOrigin ?? this.authorizationOrigin); }
+      catch {
+        throw new ConsentFlowError('consent_invalid', 'Invalid authorization origin. Use the configured RP origin.');
+      }
+      // Direct local fixtures can use their own loopback port. A configured RP
+      // always pins the exact origin, including scheme and port.
+      if (origin !== this.authorizationOrigin && (this.configuredOrigin
+        || !isLoopbackHttp(new URL(origin)) || !isLoopbackHttp(new URL(this.authorizationOrigin))))
         throw new ConsentFlowError(
           'consent_invalid',
-          'The demo authorization origin must be localhost.',
+          'The authorization origin must match the configured RP origin.',
         );
+      const url = new URL('/consent', origin);
       url.searchParams.set('resume_token', resumeToken);
       url.searchParams.set('agent_did', bindings.agentDid);
       url.searchParams.set('scopes', bindings.productClass);

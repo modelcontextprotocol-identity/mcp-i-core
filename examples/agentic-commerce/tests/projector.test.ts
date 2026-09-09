@@ -95,7 +95,7 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
   html = fs.readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1]!, new Element()]));
   const streams = new Map<string, { onmessage?: (event: { data: string }) => void; onopen?: () => void }>();
-  const state = { credential, responses: {} as Record<string, unknown>, requests: [] as string[], posts: [] as Array<{ url: string; body: unknown }> };
+  const state = { credential, responses: {} as Record<string, unknown>, statuses: {} as Record<string, number>, requests: [] as string[], posts: [] as Array<{ url: string; body: unknown }> };
   const listeners = new Map<string, (event: unknown) => void>();
   const get = (id: string) => {
     if (!elements.has(id) && /^(ledger-row-|tree-forged)/.test(id)) elements.set(id, new Element());
@@ -116,7 +116,8 @@ async function projector(initialChallenge?: Record<string, unknown>, credential:
       state.requests.push(url);
       if (options?.body) state.posts.push({ url, body: JSON.parse(options.body) });
       if (state.responses[url] instanceof Error) throw state.responses[url];
-      return { json: async () => Object.hasOwn(state.responses, url)
+      const status = state.statuses[url] ?? 200;
+      return { status, ok: status >= 200 && status < 300, json: async () => Object.hasOwn(state.responses, url)
       ? typeof state.responses[url] === 'function' ? (state.responses[url] as () => unknown)() : state.responses[url] : url.endsWith('/api/state')
       ? { responsibleParty: { hubOrigin: 'http://localhost:4950' }, authorizationChallenge: initialChallenge }
       : url.endsWith('/api/rp/state')
@@ -424,6 +425,24 @@ describe('projector human-grant journey', () => {
     const p = await projector(undefined, scoped);
     expect(p.get('c-action-scopes').textContent).toBe(scopes.join(' · '));
     expect(p.get('c-action-scopes').textContent).not.toContain('different_tool');
+  });
+
+  it.each(['order', 'day'])('keeps the currency amount separate from its signed per-%s limit', async (per) => {
+    const grant = namedGrant();
+    const scoped = { ...grant, credentialSubject: { ...grant.credentialSubject, delegation: {
+      ...grant.credentialSubject.delegation,
+      constraints: { ...grant.credentialSubject.delegation.constraints, crisp: { scopes: [{
+        resource: 'https://id.gs1.org/01/09506000134352', matcher: 'gs1-product-class',
+        constraints: { currency: 'CHF', maxAmount: '50.00', per },
+      }] } },
+    } } };
+    const p = await projector(undefined, scoped);
+    expect(p.get('c-cap-label').textContent).toBe(`Per-${per} limit`);
+    expect(p.get('c-cap').textContent).toBe('CHF 50.00');
+    p.state.credential = null;
+    p.emit('/api/events', { type: 'reset' });
+    expect(p.get('c-cap-label').textContent).toBe('Per-order limit');
+    expect(p.get('c-cap').textContent).toBe('—');
   });
 
   it.each([
@@ -1101,5 +1120,79 @@ describe('audit edit lifecycle and truthful event summaries', () => {
     const message = p.get('log').children[0]!.children[0]!.innerHTML;
     expect(message).toContain('no following chain link');
     expect(message).not.toContain('chain break at #');
+  });
+});
+
+describe('console HTTP failure handling', () => {
+  it.each([
+    { status: 401, body: { error: 'admin_required' }, detail: 'admin_required' },
+    { status: 403, body: { message: 'Origin refused' }, detail: 'Origin refused' },
+    { status: 502, body: { error: 'RP reset refused' }, detail: 'RP reset refused' },
+  ])('preserves the receipt and reports HTTP $status when reset is refused', async ({ status, body, detail }) => {
+    const p = await projector();
+    const previous = '<div>Previous signed receipt</div>';
+    p.get('receipt').innerHTML = previous;
+    p.state.statuses['/api/act/reset'] = status;
+    p.state.responses['/api/act/reset'] = body;
+    await p.get('btn-reset').onclick!();
+    expect(p.get('receipt').innerHTML).toBe(previous);
+    expect(p.get('log').children[0]!.children[0]!.innerHTML)
+      .toContain(`reset failed: HTTP ${status}: ${detail}`);
+    p.state.statuses['/api/act/reset'] = 200;
+    p.state.responses['/api/act/reset'] = { success: true };
+    await p.get('btn-reset').onclick!();
+    expect(p.get('receipt').innerHTML).not.toBe(previous);
+  });
+
+  it('reports a proxy HTTP error even when its body is not JSON', async () => {
+    const p = await projector();
+    p.get('receipt').innerHTML = 'Preserved receipt';
+    p.state.statuses['/api/act/reset'] = 503;
+    p.state.responses['/api/act/reset'] = () => { throw new SyntaxError('Unexpected token <'); };
+    await p.get('btn-reset').onclick!();
+    expect(p.get('receipt').innerHTML).toBe('Preserved receipt');
+    const message = p.get('log').children[0]!.children[0]!.innerHTML;
+    expect(message).toContain('reset failed: HTTP 503');
+    expect(message).not.toContain('Unexpected token');
+  });
+
+  it('preserves the receipt when a successful HTTP response contains an operation error', async () => {
+    const p = await projector();
+    p.get('receipt').innerHTML = 'Preserved receipt';
+    p.state.responses['/api/act/reset'] = { error: 'reset_unavailable' };
+    await p.get('btn-reset').onclick!();
+    expect(p.get('receipt').innerHTML).toBe('Preserved receipt');
+    expect(p.get('log').children[0]!.children[0]!.innerHTML)
+      .toContain('reset failed: reset_unavailable');
+  });
+
+  it('accepts only the documented no-delegation 404 as an empty grant', async () => {
+    const p = await projector();
+    const endpoint = 'http://localhost:4950/api/rp/delegation';
+    p.state.statuses[endpoint] = 404;
+    p.state.responses[endpoint] = { error: 'no active delegation' };
+    p.reconnect('http://localhost:4950/api/rp/events');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get('rp-pill').textContent).toContain('no active grant');
+    const before = p.get('log').children.length;
+    p.state.responses[endpoint] = { error: 'route not found' };
+    p.reconnect('http://localhost:4950/api/rp/events');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get('log').children).toHaveLength(before + 1);
+    expect(p.get('log').children[0]!.children[0]!.innerHTML)
+      .toContain('HTTP 404: route not found');
+  });
+
+  it('reconciles a structured revocation refusal without leaving VERIFYING on screen', async () => {
+    const p = await projector();
+    p.state.responses['http://localhost:4950/api/rp/state'] = { grantIssued: true, activeIndex: 94, keyRequired: false, revoked: false, statusList: { version: 1 } };
+    p.state.statuses['http://localhost:4950/api/rp/revoke'] = 403;
+    p.state.responses['http://localhost:4950/api/rp/revoke'] = { error: 'admin_required', message: 'Operator authentication required' };
+    p.emit('http://localhost:4950/api/rp/events', { type: 'revoke_start', index: 94 });
+    await p.get('btn-revoke').onclick!();
+    expect(p.get('verdict-code').textContent).toBe('REVOCATION_NOT_CONFIRMED');
+    expect(p.get('seal').textContent).not.toBe('VERIFYING');
+    expect(p.get('log').children[0]!.children[0]!.innerHTML)
+      .toContain('HTTP 403: Operator authentication required');
   });
 });

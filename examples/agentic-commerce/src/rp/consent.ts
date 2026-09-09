@@ -3,6 +3,7 @@
 import { Hono, type Context } from 'hono';
 import type { KeyedIdentity } from '../lib/wiring.js';
 import { env, makeVcSigningFunction } from '../lib/wiring.js';
+import { publicOrigin } from '../lib/public-origin.js';
 import { ensureStatusList, readBit, STATUS_LIST_SIZE } from './statuslist.js';
 import { issueAndActivate, nextDelegationIndex } from './issue.js';
 import { hasAuthenticator } from './key/credential-store.js';
@@ -21,6 +22,9 @@ import {
 export interface ConsentRoutesConfig {
   identity: KeyedIdentity;
   statusListUrl: string;
+  /** Browser-facing RP origin, independent of an internal reverse-proxy URL. */
+  authorizationOrigin?: string;
+  rpID?: string;
   agentDid: () => string;
   merchantDid: () => string;
   store?: ConsentFlowStore;
@@ -54,9 +58,10 @@ async function parseFields(c: Context): Promise<ConsentFields> {
 }
 export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
   const app = new Hono();
-  const store = config.store ?? new ConsentFlowStore();
+  const origin = publicOrigin(config.authorizationOrigin ?? new URL(config.statusListUrl).origin);
+  const store = config.store ?? new ConsentFlowStore({ authorizationOrigin: origin });
   const ceremony = new ConsentWebauthn({
-    rpID: env('WEBAUTHN_RP_ID', 'localhost'),
+    rpID: config.rpID ?? env('WEBAUTHN_RP_ID', 'localhost'),
   });
   const keyRequired = () =>
     Boolean(config.identityAuth?.enabled || (config.consentWebauthn && hasAuthenticator()));
@@ -68,7 +73,7 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
     if (
       c.req.method === 'POST' &&
       c.req.header('Origin') &&
-      c.req.header('Origin') !== new URL(c.req.url).origin
+      c.req.header('Origin') !== origin
     )
       return c.json(
         {
@@ -139,7 +144,7 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
       authorizationUrl: flow.challenge.authorizationUrl,
       agentDid: flow.bindings.agentDid,
     });
-    return c.html(renderConsent(flow, config, new URL(c.req.url).origin, account));
+    return c.html(renderConsent(flow, config, origin, account));
   });
   app.get('/consent/status', (c) => {
     c.header('Cache-Control', 'no-store');
@@ -175,7 +180,7 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
     trusted(flow);
     store.validateFields(flow, fields);
     const approvedScopes = store.selectedScopes(flow, fields);
-    return c.json(await ceremony.challenge({ ...flow, approvedScopes }, new URL(c.req.url).origin, account));
+    return c.json(await ceremony.challenge({ ...flow, approvedScopes }, origin, account));
   });
   app.post('/consent/approve', async (c) => {
     const account = config.identityAuth?.account(c) ?? undefined;
@@ -185,7 +190,7 @@ export function createConsentRoutes(config: ConsentRoutesConfig): Hono {
     const flow = await store.approve(token, fields, async (flow) => {
       trusted(flow);
       const authentication = keyRequired()
-        ? await ceremony.verify(flow, fields, new URL(c.req.url).origin, account)
+        ? await ceremony.verify(flow, fields, origin, account)
         : undefined;
       const demoConsent = account && authentication
         ? buildDemoConsent(account, authentication, token)

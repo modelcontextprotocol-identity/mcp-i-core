@@ -63,8 +63,9 @@ const verify = (result: MerchantToolResult, args = sentArgs, verifier = createAu
 
 describe('merchant authorization challenge trust boundary', () => {
   it.each([undefined, RESPONSE_PROOF_PROFILE_ENVELOPE] as const)('accepts a merchant signature binding the actual request and URL (%s)', async (profile) => {
-    const result = await signed({ proof: { profile } });
-    expect(await verify(result)).toEqual(challenge());
+    const body = challenge();
+    const result = await signed({ body, proof: { profile } });
+    expect(await verify(result)).toEqual(body);
   });
 
   it('does not interpret a normal policy denial as consent', async () => {

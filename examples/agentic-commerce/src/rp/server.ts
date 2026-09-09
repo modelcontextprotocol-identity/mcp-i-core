@@ -18,7 +18,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
-import { buildDidWebDocument, type DIDDocument } from '@kya-os/mcp';
+import { buildDidWebDocument, type DIDDocument, type VerificationMethod } from '@kya-os/mcp';
 import {
   RP_PORT,
   STATUS_LIST_URL,
@@ -27,12 +27,14 @@ import {
   loadRpIdentity,
   makeVcSigningFunction,
   merchantOrigin,
+  rpOrigin,
   readJson,
   writeJson,
   type KeyedIdentity,
 } from '../lib/wiring.js';
 import path from 'node:path';
 import { isMainModule } from '../lib/main-module.js';
+import { publicOrigin } from '../lib/public-origin.js';
 import fs from 'node:fs';
 import { WEB_DIR } from '../lib/wiring.js';
 import { GoogleIdentity } from './google-identity.js';
@@ -67,6 +69,10 @@ export interface RpAppConfig {
   origin: string;
   googleClientId?: string;
   googleOrigin?: string;
+  /** Public browser origin for consent, independent of the status-list host. */
+  authorizationOrigin?: string;
+  /** Listener address; loopback locally, 0.0.0.0 behind a deployment proxy. */
+  bindHost?: string;
   identityAuth?: HumanIdentityAuth & { routes?: Hono };
 }
 
@@ -79,11 +85,29 @@ export function buildRpDidDocument(identity: KeyedIdentity): DIDDocument {
   });
 }
 
-/** The DID document the hub serves — written once by setup, regenerated if missing. */
+/** Keep published verification material aligned with the deployed signing identity. */
 export function ensureDidDocument(identity: KeyedIdentity): DIDDocument {
   const existing = readJson<DIDDocument>(DID_DOCUMENT_FILE);
-  if (existing && existing.id === identity.did) return existing;
   const doc = buildRpDidDocument(identity);
+  const expected = doc.verificationMethod![0]!;
+  const expectedJwk = expected.publicKeyJwk as JsonWebKey;
+  const matchesKey = (method: VerificationMethod): boolean => {
+    if (!method || method.id !== expected.id || method.controller !== expected.controller || method.type !== expected.type) return false;
+    const jwk = method.publicKeyJwk as JsonWebKey | undefined;
+    const multibase = method.publicKeyMultibase;
+    // Check every advertised representation: different resolvers may prefer
+    // JWK or multibase. Neither may retain the previous deployment's key.
+    return (jwk !== undefined || multibase !== undefined)
+      && (jwk === undefined || Boolean(jwk && jwk.kty === expectedJwk.kty
+        && jwk.crv === expectedJwk.crv && jwk.x === expectedJwk.x && jwk.d === undefined))
+      && (multibase === undefined || multibase === expected.publicKeyMultibase);
+  };
+  const authorizesKey = (methods: DIDDocument['assertionMethod']): boolean => Array.isArray(methods)
+    && methods.some(method => typeof method === 'string' ? method === identity.kid : matchesKey(method));
+  const activeMethods = Array.isArray(existing?.verificationMethod)
+    ? existing.verificationMethod.filter(method => method?.id === identity.kid) : [];
+  if (existing?.id === identity.did && activeMethods.length === 1 && matchesKey(activeMethods[0]!)
+    && authorizesKey(existing.authentication) && authorizesKey(existing.assertionMethod)) return existing;
   writeJson(DID_DOCUMENT_FILE, doc);
   return doc;
 }
@@ -94,10 +118,12 @@ export function createRpApp(config: RpAppConfig): Hono {
   const signingFunction = makeVcSigningFunction(identity.privateKeyBase64);
   const googleOrigin = config.googleOrigin ?? new URL(config.statusListUrl).origin.replace('127.0.0.1', 'localhost');
   const identityAuth = config.identityAuth ?? new GoogleIdentity({ clientId: config.googleClientId, origin: googleOrigin });
+  const authorizationOrigin = publicOrigin(config.authorizationOrigin
+    ?? ((identityAuth.enabled || config.consentWebauthn) ? googleOrigin : new URL(config.statusListUrl).origin));
   // A missing key must not silently downgrade an explicitly gated deployment.
   const keyRequired = () => config.keyWebauthn && !config.bypassWebauthn;
   const revocableIndex = () => activeCredentialOrNull() ? activeIndex() : null;
-  const consentStore = new ConsentFlowStore();
+  const consentStore = new ConsentFlowStore({ authorizationOrigin });
   const consentAudit = createRpAudit(identity, consentStore);
   const protocol = new ConsentProtocol(identity.did, new URL(config.statusListUrl).origin);
 
@@ -155,7 +181,6 @@ export function createRpApp(config: RpAppConfig): Hono {
         || !Number.isFinite(bindings.validHours) || bindings.validHours <= 0 || !agentRequest
         || bindings.product !== agentRequest['product'] || bindings.quantity !== (agentRequest['quantity'] ?? 1)) throw new Error('Consent request bindings differ');
       await protocol.verify('place_order', { body: agentRequest, proof: agentRequest['_kyaos_proof'] as SignedMessage['proof'] }, config.agentDid(), config.merchantDid());
-      const authorizationOrigin = (identityAuth.enabled || config.consentWebauthn) ? googleOrigin : new URL(config.statusListUrl).origin;
       const challenge = consentStore.create({ ...bindings, authorizationOrigin });
       return c.json(await signMessage('consent.create.result', { requestNonce: message.proof.meta.nonce, challenge }, identity, config.merchantDid()));
     } catch { return c.json({ error: 'CONSENT_REQUEST_INVALID', message: 'A fresh merchant request and bound agent proof are required.' }, 400); }
@@ -186,7 +211,7 @@ export function createRpApp(config: RpAppConfig): Hono {
       return c.json(await signMessage('consent.pickup.result', { requestNonce: message.proof.meta.nonce, ...result }, identity, config.agentDid()));
     } catch { return c.json({ error: 'CONSENT_PICKUP_INVALID', message: 'Credential pickup requires its bound agent and a fresh proof.' }, 400); }
   });
-  app.route('/', createConsentRoutes({ identity, statusListUrl: config.statusListUrl, agentDid: config.agentDid, merchantDid: config.merchantDid, broadcast, consentWebauthn: config.consentWebauthn, identityAuth, store: consentStore, recordDecision: () => consentAudit.export() }));
+  app.route('/', createConsentRoutes({ identity, statusListUrl: config.statusListUrl, authorizationOrigin, rpID: config.rpID, agentDid: config.agentDid, merchantDid: config.merchantDid, broadcast, consentWebauthn: config.consentWebauthn, identityAuth, store: consentStore, recordDecision: () => consentAudit.export() }));
 
   // ---- 1. identity ----------------------------------------------------------
   app.get('/.well-known/did.json', (c) => {
@@ -196,7 +221,7 @@ export function createRpApp(config: RpAppConfig): Hono {
 
   // ---- 2. the revocation list ----------------------------------------------
   app.get('/status-list', async (c) => {
-    const list = loadStatusList() ?? (await ensureStatusList({ identity, signingFunction, url: config.statusListUrl }));
+    const list = await ensureStatusList({ identity, signingFunction, url: config.statusListUrl });
     c.header('Cache-Control', 'no-store');
     c.header('Content-Type', 'application/json');
     return c.body(JSON.stringify(list));
@@ -347,12 +372,13 @@ export function createRpApp(config: RpAppConfig): Hono {
 }
 
 export function rpConfigFromEnv(overrides: Partial<RpAppConfig> = {}): RpAppConfig {
+  const authorizationOrigin = publicOrigin(rpOrigin());
   return {
     identity: loadRpIdentity(),
     statusListUrl: STATUS_LIST_URL,
     agentDid: () => env('AGENT_DID', ''),
     merchantDid: () => env('MERCHANT_DID', ''),
-    corsOrigins: [merchantOrigin(), `http://localhost:${RP_PORT}`, `http://127.0.0.1:${RP_PORT}`],
+    corsOrigins: [...new Set([merchantOrigin(), authorizationOrigin, `http://localhost:${RP_PORT}`, `http://127.0.0.1:${RP_PORT}`])],
     keySetup: flag('KEY_SETUP'),
     keyWebauthn: flag('KEY_WEBAUTHN'),
     consentWebauthn: flag('CONSENT_WEBAUTHN'),
@@ -360,7 +386,9 @@ export function rpConfigFromEnv(overrides: Partial<RpAppConfig> = {}): RpAppConf
     rpID: env('WEBAUTHN_RP_ID', 'localhost'),
     origin: env('WEBAUTHN_ORIGIN', merchantOrigin()),
     googleClientId: env('GOOGLE_CLIENT_ID', ''),
-    googleOrigin: `http://localhost:${RP_PORT}`,
+    googleOrigin: authorizationOrigin,
+    authorizationOrigin,
+    bindHost: env('BIND_HOST', '127.0.0.1'),
     ...overrides,
   };
 }
@@ -368,7 +396,7 @@ export function rpConfigFromEnv(overrides: Partial<RpAppConfig> = {}): RpAppConf
 export function startRpServer(port = RP_PORT, overrides: Partial<RpAppConfig> = {}) {
   const config = rpConfigFromEnv(overrides);
   const app = createRpApp(config);
-  const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
+  const server = serve({ fetch: app.fetch, port, hostname: config.bindHost ?? '127.0.0.1' }, () => {
     console.log(`Responsible Party hub: http://localhost:${port}`);
     console.log(`  did:          ${config.identity.did}`);
     console.log(`  did.json:     http://localhost:${port}/.well-known/did.json`);

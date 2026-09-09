@@ -157,6 +157,35 @@ describe('every execution rail runs behind the same merchant authorization', () 
     } finally { record.mockRestore(); }
   });
 
+  it('preserves the wallet, displayed grant, cache, and event stream when the RP refuses reset', async () => {
+    await merchant.executeOrder(await signedArgs(), ({ evidence }) => ({ body: { ...evidence, error: 'REVIEW_ONLY' } }));
+    const { saveAgentState, AGENT_STATE_FILE } = await import('../src/agent/store.js');
+    saveAgentState({ credential: vc });
+    const wallet = fs.readFileSync(AGENT_STATE_FILE, 'utf8');
+    const before = await state();
+    expect(before.lastMandate).not.toBeNull();
+    const stream = await merchant.app.request('/api/events');
+    const reader = stream.body!.getReader();
+    await reader.read(); // Initial hello event.
+    const fetchOriginal = globalThis.fetch;
+    const mockedFetch = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => String(input).endsWith('/api/rp/reset')
+      ? Promise.resolve(Response.json({ error: 'ADMIN_AUTH_REQUIRED', message: 'Sign into the owner account.' }, { status: 403 }))
+      : fetchOriginal(input, init));
+    const invalidate = vi.spyOn(merchant.statusListResolver, 'invalidateCache');
+    try {
+      const response = await merchant.app.request('/api/act/reset', { method: 'POST' });
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ error: 'ADMIN_AUTH_REQUIRED' });
+      expect(fs.readFileSync(AGENT_STATE_FILE, 'utf8')).toBe(wallet);
+      expect(invalidate).not.toHaveBeenCalled();
+      expect((await state()).lastMandate).toEqual(before.lastMandate);
+      merchant.broadcast({ type: 'reset-test-complete' });
+      let events = '';
+      while (!events.includes('reset-test-complete')) events += new TextDecoder().decode((await reader.read()).value);
+      expect(events).not.toContain('"type":"reset"');
+    } finally { mockedFetch.mockRestore(); invalidate.mockRestore(); await reader.cancel(); }
+  });
+
   it('does not invoke a rail after revocation even with a fresh holder proof', async () => {
     const revoked = await fetch(`http://127.0.0.1:${rpPort}/api/rp/revoke`, { method: 'POST', body: '{}' });
     expect(revoked.ok, await revoked.text()).toBe(true);

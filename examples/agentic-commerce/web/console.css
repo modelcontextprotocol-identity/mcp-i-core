@@ -163,7 +163,8 @@ button { font: inherit; }
 .credential-evidence-row a { font-size: 14px; max-width: 100%; overflow-wrap: anywhere; }
 .credential-evidence-row .credential-id { max-width: 100%; }
 .scope-uri { display: block; margin-top: 7px; font: 14px/1.6 var(--mono); overflow-wrap: anywhere; }
-.cap { color: var(--bright); font-size: 22px; font-weight: 700; }
+.cred-row:has(.cap) { flex-wrap: wrap; gap: 5px 12px; }
+.cap { color: var(--bright); font-size: 22px; font-weight: 700; white-space: nowrap; }
 .bit-clear { color: var(--ok); } .bit-set { color: var(--kill); }
 .disclosure > summary { cursor: pointer; padding: 12px 0 0; font-size: 14px; }
 .disclosure[open] > summary { padding-bottom: 10px; }

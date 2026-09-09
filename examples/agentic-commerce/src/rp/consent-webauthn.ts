@@ -53,10 +53,13 @@ export class ConsentWebauthn {
     return createHash('sha256').update(canonicalizeJSON(this.grant(flow))).digest('hex');
   }
   async challenge(flow: ConsentFlow, origin: string, account?: HumanAccount) {
-    if (new URL(origin).hostname !== this.config.rpID)
+    const hostname = new URL(origin).hostname;
+    // A configured parent RP ID may serve both the merchant and its auth host.
+    // Assertion verification still pins the exact browser origin below.
+    if (hostname !== this.config.rpID && !hostname.endsWith('.' + this.config.rpID))
       throw new ConsentFlowError(
         'consent_origin_mismatch',
-        'Open the signed localhost consent URL to use this authenticator.',
+        'Open the signed consent URL on the configured RP host to use this authenticator.',
       );
     for (const [key, value] of this.pending)
       if (value.expiresAt <= this.now()) this.pending.delete(key);

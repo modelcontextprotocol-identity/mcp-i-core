@@ -221,6 +221,19 @@ describe('Google account bound registration', () => {
       label: 'Forged Bob',
     });
   });
+  it('keeps the verified account handle stable across enrollment requests and distinct across accounts', async () => {
+    const server = app();
+    const options = async () =>
+      (await server.request('/api/rp/key/register/options', request())).json();
+    const first = await options();
+    const second = await options();
+    expect(first.user.id).toBe(second.user.id);
+    expect(Buffer.from(first.user.id, 'base64url').toString()).toBe(alice.id);
+    current = bob;
+    const other = await options();
+    expect(other.user.id).not.toBe(first.user.id);
+    expect(Buffer.from(other.user.id, 'base64url').toString()).toBe(bob.id);
+  });
   it('rejects account switching and consumes the original pending registration', async () => {
     const server = app();
     const options = await (
@@ -374,6 +387,71 @@ describe('Google account bound registration', () => {
       ).status,
     ).toBe(200);
     expect(keys.findAuthenticator(credId)?.accountId).toBeUndefined();
+  });
+  it('uses a fresh opaque user handle for each anonymous enrollment across route instances', async () => {
+    current = null;
+    const server = app(false);
+    const options = [];
+    for (const routes of [server, server, app(false)]) {
+      options.push(
+        await (
+          await routes.request('/api/rp/key/register/options', request())
+        ).json(),
+      );
+    }
+    expect(new Set(options.map((value) => value.user.id)).size).toBe(3);
+    for (const value of options) {
+      expect(Buffer.from(value.user.id, 'base64url')).toHaveLength(32);
+      expect(value.user.name).toBe('responsible-party');
+      expect(value.authenticatorSelection.residentKey).toBe('discouraged');
+    }
+  });
+  it('keeps legacy and newly enrolled anonymous keys usable by credential ID without a user handle', async () => {
+    current = null;
+    save();
+    const server = app(false);
+    const registeredIds = [credId];
+    const userHandles: string[] = [];
+    for (const name of ['anonymous-one', 'anonymous-two']) {
+      const id = Buffer.from(name).toString('base64url');
+      const options = await (
+        await server.request('/api/rp/key/register/options', request())
+      ).json();
+      expect(
+        options.excludeCredentials.map((key: { id: string }) => key.id),
+      ).toEqual(registeredIds);
+      userHandles.push(options.user.id);
+      const response = await server.request(
+        '/api/rp/key/register/verify',
+        request(registration(options.challenge, id)),
+      );
+      expect(response.status).toBe(200);
+      expect(keys.findAuthenticator(id)?.accountId).toBeUndefined();
+      registeredIds.push(id);
+    }
+    expect(new Set(userHandles).size).toBe(2);
+    expect(keys.listAuthenticators().map((key) => key.id)).toEqual(
+      registeredIds,
+    );
+    const ceremony = new ConsentWebauthn({ rpID: 'localhost' });
+    for (const id of registeredIds) {
+      const challenge = await ceremony.challenge(flow, consentOrigin);
+      expect(
+        challenge.options.allowCredentials?.map((key) => key.id),
+      ).toEqual(registeredIds);
+      const authentication = await ceremony.verify(
+        flow,
+        {
+          webauthn_nonce: challenge.nonce,
+          webauthn_response: JSON.stringify(
+            assertion(challenge.options.challenge, id),
+          ),
+        },
+        consentOrigin,
+      );
+      expect(authentication.credentialId).toBe(id);
+      expect(keys.findAuthenticator(id)?.counter).toBe(1);
+    }
   });
 });
 
